@@ -41,17 +41,19 @@ export default function BountyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [polling, setPolling] = useState(false);
   const [pollAttempt, setPollAttempt] = useState(0);
+  const [elapsedSecs, setElapsedSecs] = useState(0);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionHash, setActionHash] = useState<string | null>(null);
 
-  const MAX_POLLS = 12; // 12 × 5s = 60s max wait
+  // GenLayer validators take 1–3 minutes. Poll every 8s for up to 4 minutes (30 × 8s = 240s).
+  const POLL_INTERVAL = 8000;
+  const MAX_POLLS = 30;
 
-  const load = useCallback(async () => {
+  const loadBountyData = useCallback(async (): Promise<boolean> => {
     const b = await getBounty(bountyId);
-    if (!b) { setLoading(false); return; }
+    if (!b) return false;
     setBounty(b);
-
     const ids = await getBountySubmissions(bountyId);
     const subs: Submission[] = [];
     for (const id of ids) {
@@ -59,58 +61,33 @@ export default function BountyDetailPage() {
       if (s) subs.push(s);
     }
     setSubmissions(subs);
+    return true;
+  }, [bountyId]);
+
+  const load = useCallback(async () => {
+    const found = await loadBountyData();
     setLoading(false);
-    setPolling(false);
-  }, [bountyId]);
+    if (!found) setPolling(true);
+  }, [loadBountyData]);
 
-  // Auto-poll after initial load returns null — contract may still be processing
-  useEffect(() => {
-    let cancelled = false;
-    async function initialLoad() {
-      const b = await getBounty(bountyId);
-      if (cancelled) return;
-      if (b) {
-        // Found immediately — load submissions too
-        setBounty(b);
-        const ids = await getBountySubmissions(bountyId);
-        const subs: Submission[] = [];
-        for (const id of ids) {
-          const s = await getSubmission(id);
-          if (s) subs.push(s);
-        }
-        if (!cancelled) { setSubmissions(subs); setLoading(false); }
-      } else {
-        // Not found yet — start auto-polling
-        setLoading(false);
-        setPolling(true);
-      }
-    }
-    initialLoad();
-    return () => { cancelled = true; };
-  }, [bountyId]);
+  useEffect(() => { load(); }, [load]);
 
-  // Poll every 5s while waiting for the contract to process
+  // Poll every 8s while waiting for the validator to confirm
   useEffect(() => {
     if (!polling) return;
     if (pollAttempt >= MAX_POLLS) { setPolling(false); return; }
     const timer = setTimeout(async () => {
-      const b = await getBounty(bountyId);
-      if (b) {
-        setBounty(b);
-        const ids = await getBountySubmissions(bountyId);
-        const subs: Submission[] = [];
-        for (const id of ids) {
-          const s = await getSubmission(id);
-          if (s) subs.push(s);
-        }
-        setSubmissions(subs);
+      const found = await loadBountyData();
+      if (found) {
         setPolling(false);
+        setElapsedSecs(0);
       } else {
         setPollAttempt((n) => n + 1);
+        setElapsedSecs((s) => s + POLL_INTERVAL / 1000);
       }
-    }, 5000);
+    }, POLL_INTERVAL);
     return () => clearTimeout(timer);
-  }, [polling, pollAttempt, bountyId]);
+  }, [polling, pollAttempt, loadBountyData]);
 
   if (loading) {
     return (
@@ -121,14 +98,26 @@ export default function BountyDetailPage() {
   }
 
   if (polling) {
+    const pct = Math.round((pollAttempt / MAX_POLLS) * 100);
     return (
-      <div className="flex flex-col items-center justify-center py-24 gap-4">
-        <Loader2 size={28} className="animate-spin text-[#38BDF8]" />
-        <p className="text-sm text-[#94A3B8]">
-          Transaction submitted — waiting for confirmation
-          {pollAttempt > 0 ? ` (${pollAttempt}/${MAX_POLLS})` : ""}…
+      <div className="flex flex-col items-center justify-center py-24 gap-5 max-w-sm mx-auto text-center px-4">
+        <Loader2 size={32} className="animate-spin text-[#38BDF8]" />
+        <div>
+          <p className="text-[#F8FAFC] font-semibold mb-1">Waiting for validator confirmation</p>
+          <p className="text-sm text-[#94A3B8]">
+            GenLayer validators take 1–3 minutes to process transactions.
+          </p>
+        </div>
+        {/* Progress bar */}
+        <div className="w-full bg-[#1E293B] rounded-full h-1.5">
+          <div
+            className="bg-[#38BDF8] h-1.5 rounded-full transition-all duration-700"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <p className="text-xs text-[#475569]">
+          {elapsedSecs > 0 ? `${elapsedSecs}s elapsed · ` : ""}checking every 8s · up to 4 min
         </p>
-        <p className="text-xs text-[#475569]">GenLayer contracts process asynchronously. This usually takes 10–30s.</p>
       </div>
     );
   }
@@ -136,17 +125,20 @@ export default function BountyDetailPage() {
   if (!bounty) {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center">
-        <p className="text-2xl mb-2">🔍</p>
-        <h2 className="text-lg font-semibold text-[#F8FAFC] mb-2">Bounty not found</h2>
-        <p className="text-sm text-[#94A3B8] mb-6">
-          The bounty could not be found after waiting. It may have failed, or the ID may be incorrect.
+        <p className="text-2xl mb-2">⏱️</p>
+        <h2 className="text-lg font-semibold text-[#F8FAFC] mb-2">Still processing</h2>
+        <p className="text-sm text-[#94A3B8] mb-2">
+          The bounty wasn&apos;t found after 4 minutes. GenLayer validators may be under load.
+        </p>
+        <p className="text-xs text-[#475569] mb-6">
+          Your transaction was submitted — click Retry to keep waiting, or check back later.
         </p>
         <div className="flex gap-3 justify-center">
           <button
-            onClick={() => { setPollAttempt(0); setPolling(true); }}
+            onClick={() => { setPollAttempt(0); setElapsedSecs(0); setPolling(true); }}
             className="px-4 py-2 rounded-xl bg-[#0F172A] border border-[#1E293B] text-sm text-[#F8FAFC] hover:border-[#38BDF8] transition-colors"
           >
-            Retry
+            Keep waiting
           </button>
           <Link href="/" className="px-4 py-2 rounded-xl bg-[#38BDF8] text-[#070A12] text-sm font-semibold hover:bg-[#0284C7] transition-colors">
             Back home
