@@ -1,0 +1,841 @@
+# v0.2.17
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+
+from genlayer import *
+import json
+import hashlib
+
+
+class BountyLens(gl.Contract):
+    """
+    BountyLens
+
+    Real DAO bounty board with:
+    - bounty creation
+    - real native GEN escrow
+    - locked acceptance criteria
+    - AI/LLM evaluation
+    - automatic payout approval
+    - real payout transfer to contributor
+    - contributor/poster reputation
+    - refund of unused escrow
+
+    IMPORTANT:
+    This version uses native GEN escrow.
+    It does not use ERC-20/USDC yet.
+    """
+
+    bounties: TreeMap[str, str]
+    submissions: TreeMap[str, str]
+    bounty_submissions: TreeMap[str, str]
+    contributor_profiles: TreeMap[str, str]
+    poster_profiles: TreeMap[str, str]
+    reviews: TreeMap[str, str]
+
+    treasury_fees: u256
+    bounty_counter: u256
+    submission_counter: u256
+
+    def __init__(self) -> None:
+        self.bounties = TreeMap()
+        self.submissions = TreeMap()
+        self.bounty_submissions = TreeMap()
+        self.contributor_profiles = TreeMap()
+        self.poster_profiles = TreeMap()
+        self.reviews = TreeMap()
+
+        self.treasury_fees = u256(0)
+        self.bounty_counter = u256(0)
+        self.submission_counter = u256(0)
+
+    # ─────────────────────────────────────────────
+    # HELPERS
+    # ─────────────────────────────────────────────
+
+    def _now(self) -> str:
+        return str(gl.message.timestamp)
+
+    def _sender(self) -> str:
+        return str(gl.message.sender_address)
+
+    def _exists(self, store: TreeMap[str, str], key: str) -> bool:
+        return store.get(key, "") != ""
+
+    def _as_u256_from_string(self, value: str) -> u256:
+        if value == "":
+            return u256(0)
+        return u256(int(value))
+
+    def _criteria_hash(
+        self,
+        acceptance_criteria: str,
+        rejection_criteria: str,
+        required_evidence: str,
+        pass_threshold: u256,
+    ) -> str:
+        payload = json.dumps(
+            {
+                "acceptance_criteria": acceptance_criteria,
+                "rejection_criteria": rejection_criteria,
+                "required_evidence": required_evidence,
+                "pass_threshold": int(pass_threshold),
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _normalise_verdict(self, value: str) -> str:
+        if value == "PASS":
+            return "PASS"
+        if value == "REVISION":
+            return "REVISION"
+        return "REJECT"
+
+    # ─────────────────────────────────────────────
+    # BOUNTY CREATION
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def create_bounty(
+        self,
+        title: str,
+        description: str,
+        category: str,
+        reward_token: str,
+        deadline_note: str,
+        max_winners: u256,
+        acceptance_criteria: str,
+        rejection_criteria: str,
+        required_evidence: str,
+        pass_threshold: u256,
+        revision_allowed: bool,
+        revision_notes: str,
+        is_private: bool,
+    ) -> str:
+        poster = self._sender()
+
+        assert title != "", "Title required"
+        assert description != "", "Description required"
+        assert category != "", "Category required"
+        assert acceptance_criteria != "", "Acceptance criteria required"
+        assert required_evidence != "", "Required evidence required"
+        assert int(max_winners) > 0, "Max winners must be greater than zero"
+        assert int(pass_threshold) > 0 and int(pass_threshold) <= 100, "Pass threshold must be 1-100"
+
+        self.bounty_counter += u256(1)
+        bounty_id = "bounty_" + str(self.bounty_counter)
+
+        bounty = {
+            "id": bounty_id,
+            "poster": poster,
+            "title": title,
+            "description": description,
+            "category": category,
+            "reward_token": reward_token,
+            "deadline_note": deadline_note,
+            "max_winners": int(max_winners),
+            "acceptance_criteria": acceptance_criteria,
+            "rejection_criteria": rejection_criteria,
+            "required_evidence": required_evidence,
+            "pass_threshold": int(pass_threshold),
+            "revision_allowed": revision_allowed,
+            "revision_notes": revision_notes,
+            "is_private": is_private,
+
+            "status": "open",
+            "funded": False,
+            "escrow_amount": "0",
+            "remaining_escrow": "0",
+            "payout_per_winner": "0",
+            "funded_at": None,
+            "refunded": False,
+
+            "criteria_locked": False,
+            "criteria_lock_timestamp": None,
+            "criteria_hash": None,
+            "first_submission_id": None,
+
+            "winners": [],
+            "winner_count": 0,
+
+            "created_at": self._now(),
+            "updated_at": self._now(),
+        }
+
+        self.bounties[bounty_id] = json.dumps(bounty)
+        self.bounty_submissions[bounty_id] = json.dumps([])
+
+        self._init_poster_profile(poster)
+
+        poster_data = json.loads(self.poster_profiles.get(poster, "{}"))
+        posted_ids = json.loads(poster_data.get("bounties_posted_ids", "[]"))
+        posted_ids.append(bounty_id)
+
+        poster_data["bounties_posted_ids"] = json.dumps(posted_ids)
+        poster_data["bounties_posted"] = int(poster_data.get("bounties_posted", 0)) + 1
+        poster_data["updated_at"] = self._now()
+
+        self.poster_profiles[poster] = json.dumps(poster_data)
+
+        return bounty_id
+
+    # ─────────────────────────────────────────────
+    # REAL FUNDING / ESCROW
+    # ─────────────────────────────────────────────
+
+    @gl.public.write.payable
+    def fund_bounty(self, bounty_id: str) -> None:
+        assert self._exists(self.bounties, bounty_id), "Bounty not found"
+
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        sender = self._sender()
+        amount = gl.message.value
+
+        assert bounty["poster"] == sender, "Not bounty poster"
+        assert bounty["status"] == "open", "Bounty not open"
+        assert not bounty.get("funded", False), "Bounty already funded"
+        assert amount > u256(0), "Must send GEN to fund bounty"
+
+        max_winners = int(bounty.get("max_winners", 1))
+        assert max_winners > 0, "Invalid max winners"
+
+        payout_per_winner = amount // u256(max_winners)
+        assert payout_per_winner > u256(0), "Funding too small"
+
+        bounty["funded"] = True
+        bounty["escrow_amount"] = str(amount)
+        bounty["remaining_escrow"] = str(amount)
+        bounty["payout_per_winner"] = str(payout_per_winner)
+        bounty["funded_at"] = self._now()
+        bounty["updated_at"] = self._now()
+
+        self.bounties[bounty_id] = json.dumps(bounty)
+
+        self._init_poster_profile(sender)
+        poster_data = json.loads(self.poster_profiles.get(sender, "{}"))
+        poster_data["bounties_funded"] = int(poster_data.get("bounties_funded", 0)) + 1
+        poster_data["updated_at"] = self._now()
+        self.poster_profiles[sender] = json.dumps(poster_data)
+
+    @gl.public.write
+    def cancel_bounty(self, bounty_id: str) -> None:
+        assert self._exists(self.bounties, bounty_id), "Bounty not found"
+
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        sender = self._sender()
+
+        assert bounty["poster"] == sender, "Not bounty poster"
+        assert bounty["status"] == "open", "Bounty not open"
+        assert not bounty.get("criteria_locked", False), "Cannot cancel after first submission"
+
+        bounty["status"] = "cancelled"
+        bounty["updated_at"] = self._now()
+        self.bounties[bounty_id] = json.dumps(bounty)
+
+        self._init_poster_profile(sender)
+        poster_data = json.loads(self.poster_profiles.get(sender, "{}"))
+        poster_data["cancellation_count"] = int(poster_data.get("cancellation_count", 0)) + 1
+        poster_data["updated_at"] = self._now()
+        self.poster_profiles[sender] = json.dumps(poster_data)
+
+    @gl.public.write
+    def refund_remaining_escrow(self, bounty_id: str) -> None:
+        assert self._exists(self.bounties, bounty_id), "Bounty not found"
+
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        sender = self._sender()
+
+        assert bounty["poster"] == sender, "Not bounty poster"
+        assert bounty.get("funded", False), "Bounty not funded"
+
+        remaining = self._as_u256_from_string(bounty.get("remaining_escrow", "0"))
+        assert remaining > u256(0), "No escrow remaining"
+
+        can_refund = False
+
+        if bounty["status"] == "cancelled":
+            can_refund = True
+
+        if bounty["status"] == "completed":
+            can_refund = True
+
+        assert can_refund, "Refund not available yet"
+
+        bounty["remaining_escrow"] = "0"
+        bounty["refunded"] = True
+        bounty["updated_at"] = self._now()
+
+        self.bounties[bounty_id] = json.dumps(bounty)
+
+        gl.get_contract_at(sender).emit_transfer(value=remaining, on="finalized")
+
+    # ─────────────────────────────────────────────
+    # UPDATE BEFORE LOCK
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def update_bounty(
+        self,
+        bounty_id: str,
+        title: str,
+        description: str,
+        acceptance_criteria: str,
+        rejection_criteria: str,
+        required_evidence: str,
+        pass_threshold: u256,
+        revision_allowed: bool,
+        revision_notes: str,
+        deadline_note: str,
+    ) -> None:
+        assert self._exists(self.bounties, bounty_id), "Bounty not found"
+
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        sender = self._sender()
+
+        assert bounty["poster"] == sender, "Not bounty poster"
+        assert bounty["status"] == "open", "Bounty not open"
+        assert not bounty.get("criteria_locked", False), "Criteria are locked"
+        assert int(pass_threshold) > 0 and int(pass_threshold) <= 100, "Pass threshold must be 1-100"
+
+        bounty["title"] = title
+        bounty["description"] = description
+        bounty["acceptance_criteria"] = acceptance_criteria
+        bounty["rejection_criteria"] = rejection_criteria
+        bounty["required_evidence"] = required_evidence
+        bounty["pass_threshold"] = int(pass_threshold)
+        bounty["revision_allowed"] = revision_allowed
+        bounty["revision_notes"] = revision_notes
+        bounty["deadline_note"] = deadline_note
+        bounty["updated_at"] = self._now()
+
+        self.bounties[bounty_id] = json.dumps(bounty)
+
+    # ─────────────────────────────────────────────
+    # SUBMISSION
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def submit_work(
+        self,
+        bounty_id: str,
+        submission_url: str,
+        description: str,
+        evidence_links: str,
+        is_revision: bool,
+        original_submission_id: str,
+    ) -> str:
+        assert self._exists(self.bounties, bounty_id), "Bounty not found"
+
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        contributor = self._sender()
+
+        assert bounty["status"] == "open", "Bounty not open"
+        assert bounty.get("funded", False), "Bounty not funded"
+        assert contributor != bounty["poster"], "Poster cannot submit to own bounty"
+        assert submission_url != "" or evidence_links != "", "Submission URL or evidence required"
+
+        if is_revision:
+            assert original_submission_id != "", "Original submission required"
+            assert self._exists(self.submissions, original_submission_id), "Original submission not found"
+
+            original = json.loads(self.submissions.get(original_submission_id, "{}"))
+            assert original["contributor"] == contributor, "Cannot revise another contributor's submission"
+            assert original["bounty_id"] == bounty_id, "Original submission belongs to another bounty"
+            assert original["status"] == "revision_requested", "Original submission is not awaiting revision"
+            assert bounty.get("revision_allowed", False), "Revision not allowed"
+
+        self.submission_counter += u256(1)
+        submission_id = "sub_" + str(self.submission_counter)
+
+        if not bounty.get("criteria_locked", False):
+            bounty["criteria_locked"] = True
+            bounty["criteria_lock_timestamp"] = self._now()
+            bounty["criteria_hash"] = self._criteria_hash(
+                bounty["acceptance_criteria"],
+                bounty["rejection_criteria"],
+                bounty["required_evidence"],
+                u256(bounty["pass_threshold"]),
+            )
+            bounty["first_submission_id"] = submission_id
+            bounty["updated_at"] = self._now()
+            self.bounties[bounty_id] = json.dumps(bounty)
+
+        submission = {
+            "id": submission_id,
+            "bounty_id": bounty_id,
+            "contributor": contributor,
+            "submission_url": submission_url,
+            "description": description,
+            "evidence_links": evidence_links,
+            "is_revision": is_revision,
+            "original_submission_id": original_submission_id if is_revision else None,
+
+            "status": "pending",
+            "verdict": None,
+            "score": None,
+            "confidence": None,
+            "duplicate_risk": None,
+            "summary": None,
+            "passed_items": None,
+            "missing_items": None,
+            "improvement_notes": None,
+            "reasoning": None,
+            "payout_decision": None,
+            "payout_approved": False,
+            "payout_approved_at": None,
+            "payout_amount": "0",
+            "fee_amount": "0",
+
+            "created_at": self._now(),
+            "reviewed_at": None,
+        }
+
+        self.submissions[submission_id] = json.dumps(submission)
+
+        submissions_list = json.loads(self.bounty_submissions.get(bounty_id, "[]"))
+        submissions_list.append(submission_id)
+        self.bounty_submissions[bounty_id] = json.dumps(submissions_list)
+
+        self._init_contributor_profile(contributor)
+
+        contributor_data = json.loads(self.contributor_profiles.get(contributor, "{}"))
+        contributor_submissions = json.loads(contributor_data.get("submission_ids", "[]"))
+        contributor_submissions.append(submission_id)
+
+        contributor_data["submission_ids"] = json.dumps(contributor_submissions)
+        contributor_data["total_attempted"] = int(contributor_data.get("total_attempted", 0)) + 1
+        contributor_data["updated_at"] = self._now()
+
+        self.contributor_profiles[contributor] = json.dumps(contributor_data)
+
+        self._evaluate_submission(submission_id, bounty_id)
+
+        return submission_id
+
+    # ─────────────────────────────────────────────
+    # AI EVALUATION
+    # ─────────────────────────────────────────────
+
+    def _evaluate_submission(self, submission_id: str, bounty_id: str) -> None:
+        assert self._exists(self.submissions, submission_id), "Submission not found"
+        assert self._exists(self.bounties, bounty_id), "Bounty not found"
+
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        submission = json.loads(self.submissions.get(submission_id, "{}"))
+        contributor = submission["contributor"]
+
+        all_submission_ids = json.loads(self.bounty_submissions.get(bounty_id, "[]"))
+
+        previous_submissions = []
+        for sid in all_submission_ids:
+            if sid != submission_id and self._exists(self.submissions, sid):
+                previous = json.loads(self.submissions.get(sid, "{}"))
+                previous_submissions.append(
+                    {
+                        "submission_id": sid,
+                        "submission_url": previous.get("submission_url", ""),
+                        "description": previous.get("description", ""),
+                        "evidence_links": previous.get("evidence_links", ""),
+                        "contributor": previous.get("contributor", ""),
+                        "verdict": previous.get("verdict", None),
+                    }
+                )
+
+        evaluation_prompt = f"""
+You are an impartial AI judge for a real DAO bounty board.
+
+Evaluate the contributor's submission ONLY against the locked bounty criteria.
+
+BOUNTY:
+Title: {bounty["title"]}
+Description: {bounty["description"]}
+Category: {bounty["category"]}
+
+LOCKED ACCEPTANCE CRITERIA:
+{bounty["acceptance_criteria"]}
+
+REJECTION CRITERIA:
+{bounty["rejection_criteria"]}
+
+REQUIRED EVIDENCE:
+{bounty["required_evidence"]}
+
+PASS THRESHOLD:
+{bounty["pass_threshold"]}
+
+CURRENT SUBMISSION:
+Submission URL: {submission["submission_url"]}
+Description: {submission["description"]}
+Evidence Links: {submission["evidence_links"]}
+Is Revision: {submission["is_revision"]}
+Original Submission ID: {submission["original_submission_id"]}
+
+PREVIOUS SUBMISSIONS FOR DUPLICATE DETECTION:
+{json.dumps(previous_submissions)}
+
+RULES:
+1. Judge only against the locked criteria.
+2. Do not invent extra requirements.
+3. Do not reward popularity, branding, wallet reputation, or social proof unless explicitly required.
+4. Check if the submission is duplicated, copied, or minimally altered from previous submissions.
+5. Score from 0 to 100.
+6. PASS requires score >= pass threshold and duplicate_risk is not HIGH.
+7. REVISION is allowed only if the score is within 15 points below pass threshold and the bounty allows revision.
+8. REJECT if the work clearly fails the criteria.
+9. REJECT if duplicate_risk is HIGH.
+
+Return only valid JSON in this exact shape:
+{{
+  "verdict": "PASS",
+  "score": 85,
+  "confidence": 0.8,
+  "duplicate_risk": "LOW",
+  "summary": "One sentence summary.",
+  "passed_items": ["criterion met"],
+  "missing_items": ["criterion not met"],
+  "improvement_notes": ["specific improvement"],
+  "reasoning": "Detailed explanation.",
+  "payout_decision": "release_payment"
+}}
+
+Allowed verdict values:
+PASS, REVISION, REJECT
+
+Allowed duplicate_risk values:
+LOW, MEDIUM, HIGH
+
+Allowed payout_decision values:
+release_payment, request_revision, reject_submission
+"""
+
+        result = eq_principle.prompt_non_comparative(
+            prompt=evaluation_prompt,
+            principle=(
+                "The JSON must be internally consistent. "
+                "PASS requires score >= pass_threshold and duplicate_risk not HIGH. "
+                "REVISION requires revision_allowed true and score within 15 points below threshold. "
+                "REJECT applies when criteria are unmet, score is too low, or duplicate_risk is HIGH."
+            ),
+        )
+
+        try:
+            verdict_data = json.loads(result)
+        except Exception:
+            verdict_data = {
+                "verdict": "REJECT",
+                "score": 0,
+                "confidence": 0.5,
+                "duplicate_risk": "LOW",
+                "summary": "Evaluation could not be parsed.",
+                "passed_items": [],
+                "missing_items": ["The AI evaluation returned invalid JSON."],
+                "improvement_notes": [],
+                "reasoning": "The evaluation response could not be parsed as valid JSON.",
+                "payout_decision": "reject_submission",
+            }
+
+        score = int(verdict_data.get("score", 0))
+        if score < 0:
+            score = 0
+        if score > 100:
+            score = 100
+
+        duplicate_risk = verdict_data.get("duplicate_risk", "LOW")
+        if duplicate_risk not in ["LOW", "MEDIUM", "HIGH"]:
+            duplicate_risk = "LOW"
+
+        threshold = int(bounty.get("pass_threshold", 80))
+        revision_allowed = bool(bounty.get("revision_allowed", False))
+
+        verdict = self._normalise_verdict(verdict_data.get("verdict", "REJECT"))
+
+        # Deterministic guardrails after AI output
+        if duplicate_risk == "HIGH":
+            verdict = "REJECT"
+        elif score >= threshold:
+            verdict = "PASS"
+        elif revision_allowed and score >= threshold - 15 and not submission.get("is_revision", False):
+            verdict = "REVISION"
+        else:
+            verdict = "REJECT"
+
+        if verdict == "PASS":
+            payout_decision = "release_payment"
+        elif verdict == "REVISION":
+            payout_decision = "request_revision"
+        else:
+            payout_decision = "reject_submission"
+
+        verdict_data["verdict"] = verdict
+        verdict_data["score"] = score
+        verdict_data["duplicate_risk"] = duplicate_risk
+        verdict_data["payout_decision"] = payout_decision
+
+        if duplicate_risk == "HIGH":
+            verdict_data["reasoning"] = (
+                "REJECTED: High duplicate risk detected. "
+                + str(verdict_data.get("reasoning", ""))
+            )
+
+        submission["status"] = "reviewed"
+        submission["verdict"] = verdict
+        submission["score"] = score
+        submission["confidence"] = verdict_data.get("confidence", 0.5)
+        submission["duplicate_risk"] = duplicate_risk
+        submission["summary"] = verdict_data.get("summary", "")
+        submission["passed_items"] = json.dumps(verdict_data.get("passed_items", []))
+        submission["missing_items"] = json.dumps(verdict_data.get("missing_items", []))
+        submission["improvement_notes"] = json.dumps(verdict_data.get("improvement_notes", []))
+        submission["reasoning"] = verdict_data.get("reasoning", "")
+        submission["payout_decision"] = payout_decision
+        submission["reviewed_at"] = self._now()
+
+        self.submissions[submission_id] = json.dumps(submission)
+        self.reviews[submission_id] = json.dumps(verdict_data)
+
+        if verdict == "PASS":
+            self._handle_pass(submission_id, bounty_id, contributor, verdict_data)
+        elif verdict == "REVISION":
+            self._handle_revision(submission_id, bounty_id, contributor)
+        else:
+            self._handle_reject(submission_id, bounty_id, contributor)
+
+    # ─────────────────────────────────────────────
+    # OUTCOME HANDLERS
+    # ─────────────────────────────────────────────
+
+    def _handle_pass(
+        self,
+        submission_id: str,
+        bounty_id: str,
+        contributor: str,
+        verdict_data: dict,
+    ) -> None:
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        submission = json.loads(self.submissions.get(submission_id, "{}"))
+
+        max_winners = int(bounty.get("max_winners", 1))
+        winner_count = int(bounty.get("winner_count", 0))
+
+        if winner_count >= max_winners:
+            submission["verdict"] = "REJECT"
+            submission["status"] = "reviewed"
+            submission["payout_decision"] = "reject_submission"
+            submission["payout_approved"] = False
+            submission["reasoning"] = "Max winners already reached for this bounty."
+            self.submissions[submission_id] = json.dumps(submission)
+            self._update_contributor_reputation(contributor, "reject", int(verdict_data.get("score", 0)))
+            return
+
+        payout_amount = self._as_u256_from_string(bounty.get("payout_per_winner", "0"))
+        remaining_escrow = self._as_u256_from_string(bounty.get("remaining_escrow", "0"))
+
+        assert payout_amount > u256(0), "Invalid payout amount"
+        assert remaining_escrow >= payout_amount, "Insufficient escrow"
+
+        fee_pct = 3 if bounty.get("is_private", False) else 2
+        fee_amount = (payout_amount * u256(fee_pct)) // u256(100)
+        net_payout = payout_amount - fee_amount
+
+        winners = bounty.get("winners", [])
+        winners.append(contributor)
+
+        bounty["winners"] = winners
+        bounty["winner_count"] = len(winners)
+        bounty["remaining_escrow"] = str(remaining_escrow - payout_amount)
+        bounty["updated_at"] = self._now()
+
+        if len(winners) >= max_winners:
+            bounty["status"] = "completed"
+
+        self.bounties[bounty_id] = json.dumps(bounty)
+
+        self.treasury_fees = self.treasury_fees + fee_amount
+
+        submission["payout_decision"] = "release_payment"
+        submission["payout_approved"] = True
+        submission["payout_approved_at"] = self._now()
+        submission["payout_amount"] = str(net_payout)
+        submission["fee_amount"] = str(fee_amount)
+        self.submissions[submission_id] = json.dumps(submission)
+
+        gl.get_contract_at(contributor).emit_transfer(value=net_payout, on="finalized")
+
+        self._update_contributor_reputation(contributor, "pass", int(verdict_data.get("score", 80)))
+        self._update_poster_reputation(bounty["poster"], "completed")
+
+    def _handle_revision(self, submission_id: str, bounty_id: str, contributor: str) -> None:
+        bounty = json.loads(self.bounties.get(bounty_id, "{}"))
+        submission = json.loads(self.submissions.get(submission_id, "{}"))
+
+        if bounty.get("revision_allowed", False) and not submission.get("is_revision", False):
+            submission["status"] = "revision_requested"
+            submission["payout_decision"] = "request_revision"
+            self.submissions[submission_id] = json.dumps(submission)
+            self._update_contributor_reputation(contributor, "revision", int(submission.get("score", 50)))
+        else:
+            submission["verdict"] = "REJECT"
+            submission["status"] = "reviewed"
+            submission["payout_decision"] = "reject_submission"
+            self.submissions[submission_id] = json.dumps(submission)
+            self._update_contributor_reputation(contributor, "reject", int(submission.get("score", 0)))
+
+    def _handle_reject(self, submission_id: str, bounty_id: str, contributor: str) -> None:
+        submission = json.loads(self.submissions.get(submission_id, "{}"))
+        self._update_contributor_reputation(contributor, "reject", int(submission.get("score", 0)))
+
+    # ─────────────────────────────────────────────
+    # REPUTATION
+    # ─────────────────────────────────────────────
+
+    def _init_contributor_profile(self, wallet: str) -> None:
+        if not self._exists(self.contributor_profiles, wallet):
+            profile = {
+                "wallet": wallet,
+                "total_attempted": 0,
+                "total_passed": 0,
+                "total_rejected": 0,
+                "total_revisions": 0,
+                "total_earned": "0",
+                "average_score": 0.0,
+                "pass_rate": 0.0,
+                "reputation_score": 0,
+                "reputation_tier": "New",
+                "submission_ids": "[]",
+                "created_at": self._now(),
+                "updated_at": self._now(),
+            }
+            self.contributor_profiles[wallet] = json.dumps(profile)
+
+    def _init_poster_profile(self, wallet: str) -> None:
+        if not self._exists(self.poster_profiles, wallet):
+            profile = {
+                "wallet": wallet,
+                "bounties_posted": 0,
+                "bounties_funded": 0,
+                "bounties_completed": 0,
+                "cancellation_count": 0,
+                "total_rewards_paid": "0",
+                "poster_trust_score": 100,
+                "bounties_posted_ids": "[]",
+                "created_at": self._now(),
+                "updated_at": self._now(),
+            }
+            self.poster_profiles[wallet] = json.dumps(profile)
+
+    def _update_contributor_reputation(self, wallet: str, outcome: str, score: int) -> None:
+        self._init_contributor_profile(wallet)
+
+        data = json.loads(self.contributor_profiles.get(wallet, "{}"))
+
+        if outcome == "pass":
+            data["total_passed"] = int(data.get("total_passed", 0)) + 1
+        elif outcome == "reject":
+            data["total_rejected"] = int(data.get("total_rejected", 0)) + 1
+        elif outcome == "revision":
+            data["total_revisions"] = int(data.get("total_revisions", 0)) + 1
+
+        total_attempted = int(data.get("total_attempted", 0))
+        total_passed = int(data.get("total_passed", 0))
+        total_rejected = int(data.get("total_rejected", 0))
+        total_revisions = int(data.get("total_revisions", 0))
+
+        if total_attempted > 0:
+            data["pass_rate"] = round((total_passed / total_attempted) * 100, 2)
+        else:
+            data["pass_rate"] = 0.0
+
+        rep = (total_passed * 10) - (total_rejected * 3) + (total_revisions * 2) + (score * 0.1)
+        data["reputation_score"] = max(0, round(rep, 1))
+
+        rep_score = data["reputation_score"]
+
+        if rep_score >= 200:
+            data["reputation_tier"] = "Legend"
+        elif rep_score >= 100:
+            data["reputation_tier"] = "Expert"
+        elif rep_score >= 50:
+            data["reputation_tier"] = "Trusted"
+        elif rep_score >= 10:
+            data["reputation_tier"] = "Active"
+        else:
+            data["reputation_tier"] = "New"
+
+        data["updated_at"] = self._now()
+        self.contributor_profiles[wallet] = json.dumps(data)
+
+    def _update_poster_reputation(self, wallet: str, event: str) -> None:
+        self._init_poster_profile(wallet)
+
+        data = json.loads(self.poster_profiles.get(wallet, "{}"))
+
+        if event == "completed":
+            data["bounties_completed"] = int(data.get("bounties_completed", 0)) + 1
+            data["poster_trust_score"] = min(100, int(data.get("poster_trust_score", 100)) + 1)
+
+        data["updated_at"] = self._now()
+        self.poster_profiles[wallet] = json.dumps(data)
+
+    # ─────────────────────────────────────────────
+    # VIEWS
+    # ─────────────────────────────────────────────
+
+    @gl.public.view
+    def get_bounty(self, bounty_id: str) -> str:
+        bounty = self.bounties.get(bounty_id, "")
+        if bounty == "":
+            return json.dumps({"error": "Bounty not found"})
+        return bounty
+
+    @gl.public.view
+    def get_submission(self, submission_id: str) -> str:
+        submission = self.submissions.get(submission_id, "")
+        if submission == "":
+            return json.dumps({"error": "Submission not found"})
+        return submission
+
+    @gl.public.view
+    def get_review(self, submission_id: str) -> str:
+        review = self.reviews.get(submission_id, "")
+        if review == "":
+            return json.dumps({"error": "Review not found"})
+        return review
+
+    @gl.public.view
+    def get_bounty_submissions(self, bounty_id: str) -> str:
+        return self.bounty_submissions.get(bounty_id, "[]")
+
+    @gl.public.view
+    def get_contributor_profile(self, wallet: str) -> str:
+        profile = self.contributor_profiles.get(wallet, "")
+        if profile == "":
+            return json.dumps({"error": "Profile not found"})
+        return profile
+
+    @gl.public.view
+    def get_poster_profile(self, wallet: str) -> str:
+        profile = self.poster_profiles.get(wallet, "")
+        if profile == "":
+            return json.dumps({"error": "Profile not found"})
+        return profile
+
+    @gl.public.view
+    def get_treasury_fees(self) -> u256:
+        return self.treasury_fees
+
+    @gl.public.view
+    def get_bounty_count(self) -> u256:
+        return self.bounty_counter
+
+    @gl.public.view
+    def get_submission_count(self) -> u256:
+        return self.submission_counter
+
+    @gl.public.view
+    def is_criteria_locked(self, bounty_id: str) -> bool:
+        bounty_raw = self.bounties.get(bounty_id, "")
+        if bounty_raw == "":
+            return False
+
+        bounty = json.loads(bounty_raw)
+        return bool(bounty.get("criteria_locked", False))
