@@ -53,7 +53,8 @@ class BountyLens(gl.Contract):
     # ─────────────────────────────────────────────
 
     def _now(self) -> str:
-        return str(gl.message.timestamp)
+        # gl.message.timestamp is not available in GenLayer VM — timestamps are display-only
+        return ""
 
     def _sender(self) -> str:
         return str(gl.message.sender_address)
