@@ -39,9 +39,13 @@ export default function BountyDetailPage() {
   const [bounty, setBounty] = useState<Bounty | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
+  const [polling, setPolling] = useState(false);
+  const [pollAttempt, setPollAttempt] = useState(0);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionHash, setActionHash] = useState<string | null>(null);
+
+  const MAX_POLLS = 12; // 12 × 5s = 60s max wait
 
   const load = useCallback(async () => {
     const b = await getBounty(bountyId);
@@ -56,14 +60,75 @@ export default function BountyDetailPage() {
     }
     setSubmissions(subs);
     setLoading(false);
+    setPolling(false);
   }, [bountyId]);
 
-  useEffect(() => { load(); }, [load]);
+  // Auto-poll after initial load returns null — contract may still be processing
+  useEffect(() => {
+    let cancelled = false;
+    async function initialLoad() {
+      const b = await getBounty(bountyId);
+      if (cancelled) return;
+      if (b) {
+        // Found immediately — load submissions too
+        setBounty(b);
+        const ids = await getBountySubmissions(bountyId);
+        const subs: Submission[] = [];
+        for (const id of ids) {
+          const s = await getSubmission(id);
+          if (s) subs.push(s);
+        }
+        if (!cancelled) { setSubmissions(subs); setLoading(false); }
+      } else {
+        // Not found yet — start auto-polling
+        setLoading(false);
+        setPolling(true);
+      }
+    }
+    initialLoad();
+    return () => { cancelled = true; };
+  }, [bountyId]);
+
+  // Poll every 5s while waiting for the contract to process
+  useEffect(() => {
+    if (!polling) return;
+    if (pollAttempt >= MAX_POLLS) { setPolling(false); return; }
+    const timer = setTimeout(async () => {
+      const b = await getBounty(bountyId);
+      if (b) {
+        setBounty(b);
+        const ids = await getBountySubmissions(bountyId);
+        const subs: Submission[] = [];
+        for (const id of ids) {
+          const s = await getSubmission(id);
+          if (s) subs.push(s);
+        }
+        setSubmissions(subs);
+        setPolling(false);
+      } else {
+        setPollAttempt((n) => n + 1);
+      }
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [polling, pollAttempt, bountyId]);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 size={28} className="animate-spin text-[#38BDF8]" />
+      </div>
+    );
+  }
+
+  if (polling) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-4">
+        <Loader2 size={28} className="animate-spin text-[#38BDF8]" />
+        <p className="text-sm text-[#94A3B8]">
+          Transaction submitted — waiting for confirmation
+          {pollAttempt > 0 ? ` (${pollAttempt}/${MAX_POLLS})` : ""}…
+        </p>
+        <p className="text-xs text-[#475569]">GenLayer contracts process asynchronously. This usually takes 10–30s.</p>
       </div>
     );
   }
@@ -74,11 +139,11 @@ export default function BountyDetailPage() {
         <p className="text-2xl mb-2">🔍</p>
         <h2 className="text-lg font-semibold text-[#F8FAFC] mb-2">Bounty not found</h2>
         <p className="text-sm text-[#94A3B8] mb-6">
-          This bounty may still be processing. Refresh in a moment.
+          The bounty could not be found after waiting. It may have failed, or the ID may be incorrect.
         </p>
         <div className="flex gap-3 justify-center">
           <button
-            onClick={() => { setLoading(true); load(); }}
+            onClick={() => { setPollAttempt(0); setPolling(true); }}
             className="px-4 py-2 rounded-xl bg-[#0F172A] border border-[#1E293B] text-sm text-[#F8FAFC] hover:border-[#38BDF8] transition-colors"
           >
             Retry

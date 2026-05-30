@@ -60,6 +60,8 @@ export function CreateBountyForm() {
       const count = await getBountyCount();
       await createBounty(form);
       const predictedId = `bounty_${count + 1}`;
+      // Brief pause so the contract has a head-start before the detail page polls
+      await new Promise((r) => setTimeout(r, 2000));
       router.push(`/bounty/${predictedId}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Transaction failed");
