@@ -35,7 +35,6 @@ export default function HomePage() {
   const fundedOpen = openBounties.filter((b) => b.funded);
 
   const featuresRef = useReveal<HTMLDivElement>();
-  const bountiesRef = useReveal<HTMLDivElement>();
   const ctaRef = useReveal<HTMLDivElement>();
 
   return (
@@ -181,7 +180,7 @@ export default function HomePage() {
         )}
 
         {!loading && bounties.length > 0 && (
-          <div ref={bountiesRef} className="reveal grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {bounties.map((b, i) => (
               <div key={b.id} style={{ transitionDelay: `${i * 50}ms` }}>
                 <BountyCard bounty={b} />
