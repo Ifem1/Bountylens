@@ -17,7 +17,7 @@ export function BountyCard({ bounty }: { bounty: Bounty }) {
   return (
     <Link
       href={`/bounty/${bounty.id}`}
-      className="block rounded-2xl border border-[#1E293B] bg-[#0F172A] p-5 hover:border-[#38BDF8]/40 transition-colors group"
+      className="block rounded-2xl border border-[#1E293B] bg-[#0F172A] p-5 hover:border-[#38BDF8]/40 group lift"
     >
       <div className="flex items-start justify-between gap-2 mb-3">
         <span className="text-xs px-2 py-0.5 rounded-full border bg-[#111827] text-[#94A3B8] border-[#1E293B]">

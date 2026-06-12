@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { WalletButton } from "./WalletButton";
-import { useWallet } from "./WalletProvider";
-import { shortAddress } from "@/lib/format";
 
 const NAV = [
   { label: "Explore", href: "/" },
@@ -14,7 +12,6 @@ const NAV = [
 
 export function Navbar() {
   const pathname = usePathname();
-  const { address } = useWallet();
 
   return (
     <header className="sticky top-0 z-50 border-b border-[#1E293B] bg-[#070A12]/90 backdrop-blur-sm">
@@ -40,14 +37,6 @@ export function Navbar() {
           </nav>
         </div>
         <div className="flex items-center gap-3">
-          {address && (
-            <Link
-              href={`/profile/${address}`}
-              className="text-xs text-[#94A3B8] hover:text-[#38BDF8] transition-colors font-mono"
-            >
-              {shortAddress(address)}
-            </Link>
-          )}
           <WalletButton />
         </div>
       </div>

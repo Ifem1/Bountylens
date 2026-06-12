@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useWallet } from "./WalletProvider";
 import { shortAddress } from "@/lib/format";
-import { Wallet, ChevronDown, LogOut, Copy, Check } from "lucide-react";
+import Link from "next/link";
+import { Wallet, ChevronDown, LogOut, Copy, Check, User } from "lucide-react";
 
 export function WalletButton() {
   const { address, connect, disconnect, connecting } = useWallet();
@@ -59,6 +60,15 @@ export function WalletButton() {
             <p className="text-xs text-[#94A3B8] mb-0.5">Connected</p>
             <p className="text-xs font-mono text-[#F8FAFC] break-all">{address}</p>
           </div>
+
+          <Link
+            href={`/profile/${address}`}
+            onClick={() => setOpen(false)}
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#111827] transition-colors"
+          >
+            <User size={14} />
+            View profile
+          </Link>
 
           <button
             onClick={copyAddress}

@@ -1,4 +1,4 @@
-# v0.2.17
+# v0.2.18
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
@@ -268,7 +268,7 @@ class BountyLens(gl.Contract):
 
         self.bounties[bounty_id] = json.dumps(bounty)
 
-        gl.get_contract_at(sender).emit_transfer(value=remaining, on="finalized")
+        gl.get_contract_at(gl.message.sender_address).emit_transfer(value=remaining, on="finalized")
 
     # ─────────────────────────────────────────────
     # UPDATE BEFORE LOCK
@@ -509,9 +509,10 @@ Allowed payout_decision values:
 release_payment, request_revision, reject_submission
 """
 
-        result = eq_principle.prompt_non_comparative(
-            prompt=evaluation_prompt,
-            principle=(
+        result = gl.eq_principle.prompt_non_comparative(
+            lambda: gl.nondet.exec_prompt(evaluation_prompt),
+            task=evaluation_prompt,
+            criteria=(
                 "The JSON must be internally consistent. "
                 "PASS requires score >= pass_threshold and duplicate_risk not HIGH. "
                 "REVISION requires revision_allowed true and score within 15 points below threshold. "
@@ -660,7 +661,7 @@ release_payment, request_revision, reject_submission
         submission["fee_amount"] = str(fee_amount)
         self.submissions[submission_id] = json.dumps(submission)
 
-        gl.get_contract_at(contributor).emit_transfer(value=net_payout, on="finalized")
+        gl.get_contract_at(Address(contributor)).emit_transfer(value=net_payout, on="finalized")
 
         self._update_contributor_reputation(contributor, "pass", int(verdict_data.get("score", 80)))
         self._update_poster_reputation(bounty["poster"], "completed")
