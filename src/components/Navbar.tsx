@@ -17,7 +17,8 @@ export function Navbar() {
     <header className="sticky top-0 z-50 border-b border-[#1E293B] bg-[#070A12]/90 backdrop-blur-sm">
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
         <div className="flex items-center gap-6">
-          <Link href="/" className="font-bold text-[#F8FAFC] text-lg tracking-tight">
+          <Link href="/" className="flex items-center gap-2.5 font-bold text-[#F8FAFC] text-lg tracking-tight">
+            <img src="/logo.svg" alt="" width={24} height={24} className="rounded-full" />
             Bounty<span className="text-[#38BDF8]">Lens</span>
           </Link>
           <nav className="hidden md:flex items-center gap-1">
