@@ -148,13 +148,13 @@ class BountyLens(gl.Contract):
             "escrow_amount": "0",
             "remaining_escrow": "0",
             "payout_per_winner": "0",
-            "funded_at": None,
+            "funded_at": "",
             "refunded": False,
 
             "criteria_locked": False,
-            "criteria_lock_timestamp": None,
-            "criteria_hash": None,
-            "first_submission_id": None,
+            "criteria_lock_timestamp": "",
+            "criteria_hash": "",
+            "first_submission_id": "",
 
             "winners": [],
             "winner_count": 0,
@@ -369,26 +369,26 @@ class BountyLens(gl.Contract):
             "description": description,
             "evidence_links": evidence_links,
             "is_revision": is_revision,
-            "original_submission_id": original_submission_id if is_revision else None,
+            "original_submission_id": original_submission_id if is_revision else "",
 
             "status": "pending",
-            "verdict": None,
-            "score": None,
-            "confidence": None,
-            "duplicate_risk": None,
-            "summary": None,
-            "passed_items": None,
-            "missing_items": None,
-            "improvement_notes": None,
-            "reasoning": None,
-            "payout_decision": None,
+            "verdict": "",
+            "score": 0,
+            "confidence": 0,
+            "duplicate_risk": "",
+            "summary": "",
+            "passed_items": "[]",
+            "missing_items": "[]",
+            "improvement_notes": "[]",
+            "reasoning": "",
+            "payout_decision": "",
             "payout_approved": False,
-            "payout_approved_at": None,
+            "payout_approved_at": "",
             "payout_amount": "0",
             "fee_amount": "0",
 
             "created_at": self._now(),
-            "reviewed_at": None,
+            "reviewed_at": "",
         }
 
         self.submissions[submission_id] = json.dumps(submission)
@@ -438,7 +438,7 @@ class BountyLens(gl.Contract):
                         "description": previous.get("description", ""),
                         "evidence_links": previous.get("evidence_links", ""),
                         "contributor": previous.get("contributor", ""),
-                        "verdict": previous.get("verdict", None),
+                        "verdict": previous.get("verdict", ""),
                     }
                 )
 
@@ -489,7 +489,7 @@ Return only valid JSON in this exact shape:
 {{
   "verdict": "PASS",
   "score": 85,
-  "confidence": 0.8,
+  "confidence": 80,
   "duplicate_risk": "LOW",
   "summary": "One sentence summary.",
   "passed_items": ["criterion met"],
@@ -509,8 +509,11 @@ Allowed payout_decision values:
 release_payment, request_revision, reject_submission
 """
 
+        def run_evaluation() -> str:
+            return gl.nondet.exec_prompt(evaluation_prompt)
+
         result = gl.eq_principle.prompt_non_comparative(
-            lambda: gl.nondet.exec_prompt(evaluation_prompt),
+            run_evaluation,
             task=evaluation_prompt,
             criteria=(
                 "The JSON must be internally consistent. "
@@ -526,7 +529,7 @@ release_payment, request_revision, reject_submission
             verdict_data = {
                 "verdict": "REJECT",
                 "score": 0,
-                "confidence": 0.5,
+                "confidence": 50,
                 "duplicate_risk": "LOW",
                 "summary": "Evaluation could not be parsed.",
                 "passed_items": [],
@@ -582,7 +585,11 @@ release_payment, request_revision, reject_submission
         submission["status"] = "reviewed"
         submission["verdict"] = verdict
         submission["score"] = score
-        submission["confidence"] = verdict_data.get("confidence", 0.5)
+        raw_conf = verdict_data.get("confidence", 50)
+        raw_conf_int = int(raw_conf)
+        if raw_conf_int <= 1:
+            raw_conf_int = raw_conf_int * 100
+        submission["confidence"] = max(0, min(100, raw_conf_int))
         submission["duplicate_risk"] = duplicate_risk
         submission["summary"] = verdict_data.get("summary", "")
         submission["passed_items"] = json.dumps(verdict_data.get("passed_items", []))
@@ -699,8 +706,8 @@ release_payment, request_revision, reject_submission
                 "total_rejected": 0,
                 "total_revisions": 0,
                 "total_earned": "0",
-                "average_score": 0.0,
-                "pass_rate": 0.0,
+                "average_score": 0,
+                "pass_rate": 0,
                 "reputation_score": 0,
                 "reputation_tier": "New",
                 "submission_ids": "[]",
@@ -743,22 +750,22 @@ release_payment, request_revision, reject_submission
         total_revisions = int(data.get("total_revisions", 0))
 
         if total_attempted > 0:
-            data["pass_rate"] = round((total_passed / total_attempted) * 100, 2)
+            data["pass_rate"] = (total_passed * 10000) // total_attempted
         else:
-            data["pass_rate"] = 0.0
+            data["pass_rate"] = 0
 
-        rep = (total_passed * 10) - (total_rejected * 3) + (total_revisions * 2) + (score * 0.1)
-        data["reputation_score"] = max(0, round(rep, 1))
+        rep = (total_passed * 100) - (total_rejected * 30) + (total_revisions * 20) + score
+        data["reputation_score"] = max(0, rep)
 
         rep_score = data["reputation_score"]
 
-        if rep_score >= 200:
+        if rep_score >= 2000:
             data["reputation_tier"] = "Legend"
-        elif rep_score >= 100:
+        elif rep_score >= 1000:
             data["reputation_tier"] = "Expert"
-        elif rep_score >= 50:
+        elif rep_score >= 500:
             data["reputation_tier"] = "Trusted"
-        elif rep_score >= 10:
+        elif rep_score >= 100:
             data["reputation_tier"] = "Active"
         else:
             data["reputation_tier"] = "New"
