@@ -1,4 +1,5 @@
 import { createClient } from "genlayer-js";
+import { studionet } from "genlayer-js/chains";
 import { CONTRACT_ADDRESS, CONTRACT_FUNCTIONS } from "./contract";
 import type { Bounty, Submission, ContributorProfile, PosterProfile } from "./types";
 
@@ -7,30 +8,35 @@ const RPC =
 
 const addr = () => CONTRACT_ADDRESS as `0x${string}`;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getEth(): any {
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
+};
+
+function getEth(): EthereumProvider | undefined {
   if (typeof window === "undefined") return undefined;
-  return (window as unknown as { ethereum: unknown }).ethereum;
+  return (window as unknown as { ethereum?: EthereumProvider }).ethereum;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getClient(): any {
-  return createClient({ endpoint: RPC, provider: getEth() as any });
+function getClient(): ReturnType<typeof createClient> {
+  return createClient({ chain: studionet, endpoint: RPC, provider: getEth() });
 }
 
 /** For writes: fetches the connected account and injects it so genlayer-js can sign. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getWriteClient(): Promise<any> {
+async function getWriteClient(): Promise<ReturnType<typeof createClient>> {
   const eth = getEth();
   if (!eth) throw new Error("No wallet detected. Please install MetaMask.");
-  const accounts: string[] = await eth.request({ method: "eth_accounts" });
+  const accounts = await eth.request({ method: "eth_accounts" }) as string[];
   const account = accounts[0];
   if (!account) throw new Error("Wallet not connected. Please connect your wallet first.");
-  return createClient({
+  const client = createClient({
+    chain: studionet,
     endpoint: RPC,
-    provider: eth as any,
+    provider: eth,
     account: account as `0x${string}`,
   });
+
+  await client.connect("studionet");
+  return client;
 }
 
 function parseU256(raw: unknown): number {
@@ -206,6 +212,7 @@ export async function createBounty(args: {
       args.revisionNotes,
       args.isPrivate,
     ],
+    value: 0n,
   });
   return hash as string;
 }
@@ -241,6 +248,7 @@ export async function submitWork(args: {
       args.isRevision,
       args.originalSubmissionId,
     ],
+    value: 0n,
   });
   return hash as string;
 }
@@ -251,6 +259,7 @@ export async function cancelBounty(bountyId: string): Promise<string> {
     address: addr(),
     functionName: CONTRACT_FUNCTIONS.cancelBounty,
     args: [bountyId],
+    value: 0n,
   });
   return hash as string;
 }
@@ -261,6 +270,7 @@ export async function refundRemainingEscrow(bountyId: string): Promise<string> {
     address: addr(),
     functionName: CONTRACT_FUNCTIONS.refundRemainingEscrow,
     args: [bountyId],
+    value: 0n,
   });
   return hash as string;
 }
