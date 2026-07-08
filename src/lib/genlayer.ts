@@ -12,6 +12,17 @@ type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
 };
 
+const STUDIONET_CHAIN_ID = `0x${studionet.id.toString(16)}`;
+const STUDIONET_PARAMS = {
+  chainId: STUDIONET_CHAIN_ID,
+  chainName: studionet.name,
+  rpcUrls: [RPC],
+  nativeCurrency: studionet.nativeCurrency,
+  blockExplorerUrls: studionet.blockExplorers?.default.url
+    ? [studionet.blockExplorers.default.url]
+    : undefined,
+};
+
 function getEth(): EthereumProvider | undefined {
   if (typeof window === "undefined") return undefined;
   return (window as unknown as { ethereum?: EthereumProvider }).ethereum;
@@ -21,22 +32,46 @@ function getClient(): ReturnType<typeof createClient> {
   return createClient({ chain: studionet, endpoint: RPC, provider: getEth() });
 }
 
+async function ensureStudionet(eth: EthereumProvider): Promise<void> {
+  const currentChainId = await eth.request({ method: "eth_chainId" });
+  if (currentChainId === STUDIONET_CHAIN_ID) return;
+
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: STUDIONET_CHAIN_ID }],
+    });
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error
+      ? (error as { code?: number }).code
+      : undefined;
+    if (code !== 4902) throw error;
+
+    await eth.request({
+      method: "wallet_addEthereumChain",
+      params: [STUDIONET_PARAMS],
+    });
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: STUDIONET_CHAIN_ID }],
+    });
+  }
+}
+
 /** For writes: fetches the connected account and injects it so genlayer-js can sign. */
 async function getWriteClient(): Promise<ReturnType<typeof createClient>> {
   const eth = getEth();
   if (!eth) throw new Error("No wallet detected. Please install MetaMask.");
+  await ensureStudionet(eth);
   const accounts = await eth.request({ method: "eth_accounts" }) as string[];
   const account = accounts[0];
   if (!account) throw new Error("Wallet not connected. Please connect your wallet first.");
-  const client = createClient({
+  return createClient({
     chain: studionet,
     endpoint: RPC,
     provider: eth,
     account: account as `0x${string}`,
   });
-
-  await client.connect("studionet");
-  return client;
 }
 
 function parseU256(raw: unknown): number {
