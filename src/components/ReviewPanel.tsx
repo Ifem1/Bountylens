@@ -1,5 +1,5 @@
 import type { Submission } from "@/lib/types";
-import { safeJsonParse } from "@/lib/format";
+import { formatWeiToGen, safeJsonParse } from "@/lib/format";
 import { CheckCircle, XCircle, AlertCircle, Copy } from "lucide-react";
 
 const VERDICT_STYLES = {
@@ -13,6 +13,15 @@ const RISK_STYLES = {
   MEDIUM: "text-[#F59E0B]",
   HIGH: "text-[#EF4444]",
 };
+
+function formatConfidence(value: number): string {
+  return `${Math.round(value <= 1 ? value * 100 : value)}%`;
+}
+
+function formatPayout(value: string): string {
+  if (!value || value === "0") return "";
+  return `${formatWeiToGen(value)} GEN`;
+}
 
 export function ReviewPanel({ submission }: { submission: Submission }) {
   if (!submission.verdict) {
@@ -47,7 +56,7 @@ export function ReviewPanel({ submission }: { submission: Submission }) {
           </span>
           {submission.confidence != null && (
             <span className="text-[#94A3B8]">
-              Confidence: <span className="text-[#F8FAFC] font-semibold">{Math.round(submission.confidence * 100)}%</span>
+              Confidence: <span className="text-[#F8FAFC] font-semibold">{formatConfidence(submission.confidence)}</span>
             </span>
           )}
         </div>
@@ -131,7 +140,7 @@ export function ReviewPanel({ submission }: { submission: Submission }) {
         <div className="rounded-lg bg-[#22C55E]/10 border border-[#22C55E]/20 p-3">
           <p className="text-xs text-[#22C55E] font-medium">
             {submission.payout_approved
-              ? `✓ Payout approved${submission.payout_amount ? ` — ${submission.payout_amount} GEN` : ""}`
+              ? `Payout approved${submission.payout_amount ? ` - ${formatPayout(submission.payout_amount)}` : ""}`
               : "Payout approval processing…"}
           </p>
         </div>

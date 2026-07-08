@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   CheckCircle,
   ExternalLink,
+  Clock3,
 } from "lucide-react";
 
 const STATUS_BADGE: Record<string, string> = {
@@ -45,6 +46,8 @@ export default function BountyDetailPage() {
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionHash, setActionHash] = useState<string | null>(null);
+  const [pendingSubmissionHash, setPendingSubmissionHash] = useState<string | null>(null);
+  const [reviewPollAttempt, setReviewPollAttempt] = useState(0);
 
   // GenLayer validators take 1–3 minutes. Poll every 8s for up to 4 minutes (30 × 8s = 240s).
   const POLL_INTERVAL = 8000;
@@ -70,12 +73,20 @@ export default function BountyDetailPage() {
     if (!found) setPolling(true);
   }, [loadBountyData]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [load]);
 
   // Poll every 8s while waiting for the validator to confirm
   useEffect(() => {
     if (!polling) return;
-    if (pollAttempt >= MAX_POLLS) { setPolling(false); return; }
+    if (pollAttempt >= MAX_POLLS) {
+      const timer = setTimeout(() => setPolling(false), 0);
+      return () => clearTimeout(timer);
+    }
     const timer = setTimeout(async () => {
       const found = await loadBountyData();
       if (found) {
@@ -88,6 +99,35 @@ export default function BountyDetailPage() {
     }, POLL_INTERVAL);
     return () => clearTimeout(timer);
   }, [polling, pollAttempt, loadBountyData]);
+
+  useEffect(() => {
+    if (!pendingSubmissionHash) return;
+    const ownSubmission = submissions.find(
+      (s) => s.contributor.toLowerCase() === address?.toLowerCase()
+    );
+    if (ownSubmission?.verdict) {
+      const timer = setTimeout(() => {
+        setPendingSubmissionHash(null);
+        setReviewPollAttempt(0);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+    if (reviewPollAttempt >= MAX_POLLS) return;
+
+    const timer = setTimeout(async () => {
+      await loadBountyData();
+      setReviewPollAttempt((n) => n + 1);
+    }, POLL_INTERVAL);
+    return () => clearTimeout(timer);
+  }, [
+    address,
+    loadBountyData,
+    pendingSubmissionHash,
+    reviewPollAttempt,
+    submissions,
+    MAX_POLLS,
+    POLL_INTERVAL,
+  ]);
 
   if (loading) {
     return (
@@ -155,7 +195,7 @@ export default function BountyDetailPage() {
   );
   const canRevise =
     mySubmission?.verdict === "REVISION" && !mySubmission.is_revision;
-  const canSubmit = isOpen && bounty.funded && !isPoster && !mySubmission;
+  const canSubmit = isOpen && bounty.funded && !isPoster && !mySubmission && !pendingSubmissionHash;
   const canCancel = isPoster && isOpen && !bounty.criteria_locked;
   const remainingWei =
     bounty.remaining_escrow && bounty.remaining_escrow !== "0"
@@ -309,7 +349,11 @@ export default function BountyDetailPage() {
               <SubmitWorkForm
                 bountyId={bountyId}
                 criteriaLocked={bounty.criteria_locked}
-                onSuccess={load}
+                onSuccess={(hash) => {
+                  setPendingSubmissionHash(hash);
+                  setReviewPollAttempt(0);
+                  setTimeout(load, 2000);
+                }}
               />
             </div>
           )}
@@ -320,16 +364,23 @@ export default function BountyDetailPage() {
               isRevision
               originalSubmissionId={mySubmission.id}
               criteriaLocked={bounty.criteria_locked}
-              onSuccess={load}
+              onSuccess={(hash) => {
+                setPendingSubmissionHash(hash);
+                setReviewPollAttempt(0);
+                setTimeout(load, 2000);
+              }}
             />
           )}
 
           {/* Submissions */}
           <div>
             <h2 className="text-base font-semibold text-[#F8FAFC] mb-4">
-              Submissions ({submissions.length})
+              Submissions ({submissions.length + (pendingSubmissionHash && !mySubmission ? 1 : 0)})
             </h2>
-            {submissions.length === 0 ? (
+            {pendingSubmissionHash && !mySubmission && (
+              <PendingSubmissionCard txHash={pendingSubmissionHash} pollAttempt={reviewPollAttempt} maxPolls={MAX_POLLS} />
+            )}
+            {submissions.length === 0 && !pendingSubmissionHash ? (
               <div className="rounded-2xl border border-[#1E293B] bg-[#0F172A] p-8 text-center">
                 <p className="text-[#94A3B8] text-sm">No submissions yet.</p>
               </div>
@@ -506,6 +557,42 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between gap-2">
       <span className="text-[#94A3B8] flex-shrink-0">{label}</span>
       <span className="text-[#F8FAFC] text-right">{children}</span>
+    </div>
+  );
+}
+
+function PendingSubmissionCard({
+  txHash,
+  pollAttempt,
+  maxPolls,
+}: {
+  txHash: string;
+  pollAttempt: number;
+  maxPolls: number;
+}) {
+  const pct = Math.min(100, Math.round((pollAttempt / maxPolls) * 100));
+  return (
+    <div className="rounded-2xl border border-[#38BDF8]/30 bg-[#38BDF8]/5 p-5 mb-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5">
+          <Clock3 size={18} className="text-[#38BDF8] animate-pulse" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-[#F8FAFC] mb-1">
+            Validators are reviewing your submission
+          </p>
+          <p className="text-xs text-[#94A3B8] leading-relaxed mb-3">
+            Your transaction is on GenLayer. The submission will appear here first, then the final verdict will replace this pending state when validator evaluation completes.
+          </p>
+          <div className="w-full bg-[#1E293B] rounded-full h-1.5 mb-2">
+            <div
+              className="bg-[#38BDF8] h-1.5 rounded-full transition-all duration-700"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className="text-xs text-[#475569] font-mono break-all">{txHash}</p>
+        </div>
+      </div>
     </div>
   );
 }

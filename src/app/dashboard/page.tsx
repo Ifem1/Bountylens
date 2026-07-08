@@ -7,6 +7,7 @@ import {
   getContributorProfile,
   getPosterProfile,
   getBounty,
+  getAllBounties,
   getSubmission,
 } from "@/lib/genlayer";
 import { safeJsonParse } from "@/lib/format";
@@ -28,9 +29,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!address) return;
-    setLoading(true);
 
     async function load() {
+      setLoading(true);
       const [cp, pp] = await Promise.all([
         getContributorProfile(address!),
         getPosterProfile(address!),
@@ -39,23 +40,41 @@ export default function DashboardPage() {
       setPosterProfile(pp);
 
       // Load submissions from contributor profile index
+      let loadedSubmissions: Submission[] = [];
       if (cp?.submission_ids) {
         const ids = safeJsonParse<string[]>(cp.submission_ids, []);
         const subs = await Promise.all(ids.map((id) => getSubmission(id)));
-        setMySubmissions(subs.filter(Boolean) as Submission[]);
+        loadedSubmissions = subs.filter(Boolean) as Submission[];
       }
+      setMySubmissions(loadedSubmissions);
 
-      // Load bounties from poster profile index
+      // Load bounties from poster profile index, then fall back to a recent global scan.
+      let loadedBounties: Bounty[] = [];
       if (pp?.bounties_posted_ids) {
         const ids = safeJsonParse<string[]>(pp.bounties_posted_ids, []);
         const bounties = await Promise.all(ids.map((id) => getBounty(id)));
-        setMyBounties(bounties.filter(Boolean) as Bounty[]);
+        loadedBounties = bounties.filter(Boolean) as Bounty[];
+      }
+      const fallbackBounties = await getAllBounties(100);
+      const ownFallbackBounties = fallbackBounties.filter(
+        (b) => b.poster.toLowerCase() === address!.toLowerCase()
+      );
+      const mergedBounties = [...loadedBounties, ...ownFallbackBounties].filter(
+        (bounty, index, all) => all.findIndex((b) => b.id === bounty.id) === index
+      );
+      setMyBounties(mergedBounties);
+
+      if (mergedBounties.length > 0 && loadedSubmissions.length === 0) {
+        setTab("poster");
       }
 
       setLoading(false);
     }
 
-    load();
+    const timer = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [address]);
 
   if (!address) {

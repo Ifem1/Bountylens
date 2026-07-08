@@ -9,7 +9,7 @@ type Props = {
   isRevision?: boolean;
   originalSubmissionId?: string;
   criteriaLocked: boolean;
-  onSuccess: () => void;
+  onSuccess: (txHash: string) => void;
 };
 
 export function SubmitWorkForm({
@@ -40,7 +40,7 @@ export function SubmitWorkForm({
         originalSubmissionId,
       });
       setTxHash(hash);
-      setTimeout(onSuccess, 2000);
+      onSuccess(hash);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Transaction failed");
     } finally {
@@ -54,7 +54,9 @@ export function SubmitWorkForm({
         <p className="text-sm font-semibold text-[#22C55E] mb-1">
           {isRevision ? "Revision submitted!" : "Submission sent!"}
         </p>
-        <p className="text-xs text-[#94A3B8] mb-1">GenLayer is evaluating your work. Check back soon.</p>
+        <p className="text-xs text-[#94A3B8] mb-1">
+          GenLayer validators are reviewing your work. This can take a few minutes.
+        </p>
         <p className="text-xs text-[#94A3B8] font-mono break-all">{txHash}</p>
       </div>
     );

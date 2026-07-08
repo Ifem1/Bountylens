@@ -1,4 +1,5 @@
 import type { ContributorProfile, PosterProfile } from "@/lib/types";
+import { formatWeiToGen } from "@/lib/format";
 
 const TIER_COLORS: Record<string, string> = {
   New: "text-[#94A3B8] border-[#94A3B8]/30 bg-[#94A3B8]/10",
@@ -10,6 +11,7 @@ const TIER_COLORS: Record<string, string> = {
 
 export function ContributorCard({ profile }: { profile: ContributorProfile }) {
   const tierStyle = TIER_COLORS[profile.reputation_tier] || TIER_COLORS.New;
+  const passRate = profile.pass_rate > 100 ? profile.pass_rate / 100 : profile.pass_rate;
 
   return (
     <div className="rounded-2xl border border-[#1E293B] bg-[#0F172A] p-5">
@@ -30,12 +32,12 @@ export function ContributorCard({ profile }: { profile: ContributorProfile }) {
       <div className="space-y-2">
         <div className="flex justify-between text-sm">
           <span className="text-[#94A3B8]">Pass rate</span>
-          <span className="text-[#F8FAFC] font-semibold">{profile.pass_rate.toFixed(1)}%</span>
+          <span className="text-[#F8FAFC] font-semibold">{passRate.toFixed(1)}%</span>
         </div>
         <div className="w-full bg-[#1E293B] rounded-full h-1.5">
           <div
             className="bg-[#22C55E] h-1.5 rounded-full transition-all"
-            style={{ width: `${Math.min(100, profile.pass_rate)}%` }}
+            style={{ width: `${Math.min(100, passRate)}%` }}
           />
         </div>
         <div className="flex justify-between text-sm">
@@ -45,7 +47,7 @@ export function ContributorCard({ profile }: { profile: ContributorProfile }) {
         {profile.total_earned && profile.total_earned !== "0" && (
           <div className="flex justify-between text-sm">
             <span className="text-[#94A3B8]">Total earned</span>
-            <span className="text-[#22C55E] font-semibold">{profile.total_earned} GEN</span>
+            <span className="text-[#22C55E] font-semibold">{formatWeiToGen(profile.total_earned)} GEN</span>
           </div>
         )}
       </div>
@@ -80,7 +82,7 @@ export function PosterCard({ profile }: { profile: PosterProfile }) {
       {profile.total_rewards_paid && profile.total_rewards_paid !== "0" && (
         <div className="mt-3 pt-3 border-t border-[#1E293B] flex justify-between text-sm">
           <span className="text-[#94A3B8]">Total paid out</span>
-          <span className="text-[#22C55E] font-semibold">{profile.total_rewards_paid} GEN</span>
+          <span className="text-[#22C55E] font-semibold">{formatWeiToGen(profile.total_rewards_paid)} GEN</span>
         </div>
       )}
     </div>
