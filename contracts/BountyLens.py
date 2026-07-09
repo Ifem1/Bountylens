@@ -178,6 +178,31 @@ class BountyLens(gl.Contract):
             "additional_links": links,
         }
 
+    def _response_status(self, response: object) -> int:
+        for attr in ["status_code", "status", "code"]:
+            try:
+                value = getattr(response, attr)
+                if value is not None:
+                    return int(value)
+            except Exception:
+                pass
+        return 0
+
+    def _response_body(self, response: object) -> str:
+        raw_body = ""
+        for attr in ["body", "text", "content"]:
+            try:
+                value = getattr(response, attr)
+                if value is not None:
+                    raw_body = value
+                    break
+            except Exception:
+                pass
+
+        if hasattr(raw_body, "decode"):
+            return raw_body.decode("utf-8")
+        return str(raw_body)
+
     def _web_status_summary(self, url: str, label: str) -> dict:
         if url == "":
             return {
@@ -188,7 +213,7 @@ class BountyLens(gl.Contract):
             }
 
         response = gl.nondet.web.get(url)
-        status_code = int(response.status_code)
+        status_code = self._response_status(response)
         return {
             "label": label,
             "url": url,
@@ -207,12 +232,8 @@ class BountyLens(gl.Contract):
             }
 
         response = gl.nondet.web.get(url)
-        status_code = int(response.status_code)
-        raw_body = response.body
-        if hasattr(raw_body, "decode"):
-            body = raw_body.decode("utf-8")
-        else:
-            body = str(raw_body)
+        status_code = self._response_status(response)
+        body = self._response_body(response)
         fields = {}
         try:
             data = json.loads(body)
@@ -301,11 +322,8 @@ class BountyLens(gl.Contract):
         }
 
     def _verify_evidence(self, evidence: dict) -> dict:
-        def fetch_evidence() -> dict:
-            return self._collect_web_evidence(evidence)
-
         try:
-            return gl.eq_principle.strict_eq(fetch_evidence)
+            return self._collect_web_evidence(evidence)
         except Exception as error:
             return {
                 "web_checked": False,
