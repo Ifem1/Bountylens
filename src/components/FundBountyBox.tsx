@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { fundBounty } from "@/lib/genlayer";
 import { parseGenToWei } from "@/lib/format";
-import { AlertTriangle, Loader2, ExternalLink } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 
 type Props = {
   bountyId: string;

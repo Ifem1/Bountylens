@@ -12,6 +12,7 @@ export type Bounty = {
   acceptance_criteria: string;
   rejection_criteria: string;
   required_evidence: string;
+  evidence_schema: string;
   pass_threshold: number;
   revision_allowed: boolean;
   revision_notes: string;
@@ -40,9 +41,19 @@ export type Submission = {
   submission_url: string;
   description: string;
   evidence_links: string;
+  evidence_payload?: string;
+  repo_url?: string;
+  commit_sha?: string;
+  demo_url?: string;
+  pr_url?: string;
+  docs_url?: string;
+  test_command?: string;
   is_revision: boolean;
   original_submission_id: string | null;
   status: string;
+  evidence_status?: "verified" | "weak" | "unverified" | "pending";
+  evidence_hash?: string;
+  evidence_proof?: string;
   verdict: "PASS" | "REVISION" | "REJECT" | null;
   score: number | null;
   confidence: number | null;
@@ -103,3 +114,40 @@ export const BOUNTY_CATEGORIES = [
   "Infrastructure",
   "Other",
 ] as const;
+
+export type EvidenceMode = "repo_demo" | "pull_request" | "research_report" | "custom";
+
+export type EvidencePayload = {
+  repo_url: string;
+  commit_sha: string;
+  demo_url: string;
+  pr_url: string;
+  docs_url: string;
+  test_command: string;
+  notes: string;
+  additional_links: string[];
+};
+
+export type EvidenceCheck = {
+  label: string;
+  url: string;
+  status_code: number;
+  reachable: boolean;
+  stable_fields?: Record<string, unknown>;
+  error?: string;
+};
+
+export type EvidenceProof = {
+  web_checked: boolean;
+  repo_verified: boolean;
+  commit_verified: boolean;
+  demo_verified: boolean;
+  pr_verified: boolean;
+  evidence_hash: string;
+  checks: EvidenceCheck[];
+  repo?: {
+    owner?: string;
+    repo?: string;
+    api?: string;
+  };
+};

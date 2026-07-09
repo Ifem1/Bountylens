@@ -1,12 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    {
-      "name": "bountylens-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 3000,
-      "autoPort": false
-    }
+    { "name": "bountylens-dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 3000 },
+    { "name": "vercel-proxy", "runtimeExecutable": "node", "runtimeArgs": ["scripts/redirect-server.mjs"], "port": 3100 }
   ]
 }

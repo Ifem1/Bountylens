@@ -1,11 +1,12 @@
 # BountyLens
 
-**AI-judged DAO bounties with locked criteria, GenLayer verdicts, and native GEN escrow.**
+**Evidence-verified DAO bounties with locked criteria, GenLayer verdicts, and native GEN escrow.**
 
-> BountyLens lets protocols create contribution bounties, lock the judging criteria on-chain, accept work from contributors, and use a GenLayer Intelligent Contract to return an explainable PASS, REVISION, or REJECT verdict.
+> BountyLens lets protocols create contribution bounties, lock judging criteria and evidence requirements on-chain, accept work from contributors, and use a GenLayer Intelligent Contract to fetch web evidence before returning an explainable PASS, REVISION, or REJECT verdict.
 
 Live app: https://bountylens-livid.vercel.app  
 Repository: https://github.com/Ifem1/Bountylens
+Current Studionet contract: `0x7d4159e49444b7D7a2f848412d9f19f8031d2474`
 
 ---
 
@@ -16,9 +17,9 @@ DAO bounty workflows often break down because criteria change after work is subm
 | Problem | BountyLens approach |
 |---|---|
 | Moving goalposts after work is done | Criteria lock on first submission |
-| Slow bounty reviews | GenLayer AI evaluates submitted work |
+| Slow bounty reviews | GenLayer validators fetch evidence and evaluate submitted work |
 | Unclear rejection reasons | Every review stores structured reasoning |
-| Duplicate or low-effort submissions | Duplicate risk is checked against prior submissions |
+| Duplicate or low-effort submissions | Duplicate repo, commit, demo, and submission evidence is checked |
 | Manual payout decisions | PASS verdicts approve settlement logic |
 | No portable reputation | Contributor and poster stats live in contract state |
 
@@ -36,10 +37,13 @@ DAO funds bounty with native GEN
 Contributor submits work
         |
         v
-Criteria lock on-chain
+Criteria and evidence schema lock on-chain
         |
         v
-GenLayer evaluates submission
+Validators fetch repo/demo/PR/docs evidence
+        |
+        v
+GenLayer evaluates verified evidence
         |
         +--> PASS: payout approved, reputation updated
         |
@@ -52,12 +56,20 @@ GenLayer evaluates submission
 
 - Create public or private bounties with acceptance criteria, rejection rules, evidence requirements, pass thresholds, winner limits, and revision settings.
 - Fund bounties with native GEN on GenLayer Studionet.
-- Lock criteria after the first submission so posters cannot change the rules midstream.
-- Submit work with URLs, descriptions, and supporting evidence.
-- Evaluate submissions through a GenLayer Intelligent Contract.
-- Store verdicts, scores, duplicate risk, reasoning, and payout decisions on-chain.
-- Track contributor and poster reputation from real bounty outcomes.
+- Lock criteria and evidence schemas after the first submission so posters cannot change the rules midstream.
+- Submit structured evidence: GitHub repo, commit SHA, live demo, pull request, docs/proof URL, test command, and notes.
+- Fetch submitted web evidence inside the GenLayer Intelligent Contract before judging.
+- Store verdicts, scores, duplicate risk, evidence status, evidence hash, web proof, reasoning, and payout decisions on-chain.
+- Track contributor earnings, average score, pass rate, and poster payout history from real bounty outcomes.
 - Connect through an injected EIP-1193 wallet on GenLayer Studionet. No WalletConnect or Snap flow is required.
+
+---
+
+## Why GenLayer Is Needed
+
+BountyLens is not an advice, recommendation, or summary app with consensus attached. It uses validator consensus because real GEN escrow is released based on externally verifiable bounty outcomes.
+
+The contract performs validator-side web access with `gl.nondet.web.get()` and stores a stable proof trail before payout logic runs. A PASS verdict requires more than valid JSON: required web evidence must be reachable and consistent with the locked evidence schema. If the repo/demo/PR/docs evidence cannot be verified, the deterministic guardrails reject the submission.
 
 ---
 
@@ -149,12 +161,15 @@ The contract in `contracts/BountyLens.py` is the backend for the app. It stores 
 
 ## AI Review Model
 
-Each submission is judged against the bounty's locked requirements. The contract expects structured review output with:
+Each submission is judged against the bounty's locked requirements and the validator-fetched evidence proof. The contract expects structured review output with:
 
 - `verdict`: `PASS`, `REVISION`, or `REJECT`
 - `score`: numeric quality score
 - `confidence`: reviewer confidence
 - `duplicate_risk`: `LOW`, `MEDIUM`, or `HIGH`
+- `evidence_status`: `verified`, `weak`, or `unverified`
+- `evidence_checks`: short descriptions of fetched evidence results
+- `web_evidence`: stable proof object containing fetched URL status, selected GitHub/API fields, reachability flags, and evidence hash
 - `summary`: short result explanation
 - `passed_items`: criteria satisfied by the submission
 - `missing_items`: criteria that were not met
@@ -166,11 +181,27 @@ Each submission is judged against the bounty's locked requirements. The contract
 
 | Result | Meaning |
 |---|---|
-| `PASS` | Submission meets the locked criteria and payout can be approved |
+| `PASS` | Submission meets the locked criteria, required web evidence is verified, and payout can be approved |
 | `REVISION` | Submission is close enough for one improvement attempt, if revisions are enabled |
-| `REJECT` | Submission misses required criteria, duplicates prior work, or fails the pass threshold |
+| `REJECT` | Submission misses required criteria, lacks verified evidence, duplicates prior work, or fails the pass threshold |
 
-High duplicate risk forces rejection even when the submission otherwise appears strong.
+High duplicate risk or unverified required evidence forces rejection even when the submission otherwise appears strong.
+
+### Evidence verification
+
+Submitted evidence is structured as JSON and may include:
+
+| Field | Purpose |
+|---|---|
+| `repo_url` | GitHub repository to fetch through the GitHub API |
+| `commit_sha` | Optional exact commit to verify |
+| `demo_url` | Live demo URL checked for reachability |
+| `pr_url` | GitHub pull request checked through the GitHub API |
+| `docs_url` | Documentation or proof URL checked for reachability |
+| `test_command` | Contributor-provided command reviewers can reproduce |
+| `notes` | Pointers to files, routes, or behavior validators should inspect |
+
+The contract stores `evidence_status`, `evidence_hash`, and `evidence_proof` on each submission. The UI shows these checks inside the review panel.
 
 ---
 
@@ -261,6 +292,8 @@ Deploy `contracts/BountyLens.py` to GenLayer Studionet, then set:
 NEXT_PUBLIC_BOUNTYLENS_CONTRACT_ADDRESS=0xYOUR_DEPLOYED_CONTRACT
 ```
 
+The evidence-verification upgrade changes the `create_bounty`, `update_bounty`, and `submit_work` argument payloads. Redeploy the contract before pointing the frontend at it.
+
 ### 4. Run the app
 
 ```powershell
@@ -284,6 +317,15 @@ Use MetaMask, Rabby, or another injected EIP-1193 wallet. The app checks for Gen
 | `npm run start` | Start the production server |
 | `npm run lint` | Run ESLint |
 
+Studionet contract checks:
+
+```powershell
+node --env-file=.env.test scripts/test-all.mjs step0 happy_create_fund_update revert_paths
+node --env-file=.env.test scripts/test-all.mjs nondet_evaluation
+```
+
+The nondeterministic suite creates a bounty that requires web-verifiable repo/demo evidence, submits structured evidence JSON, and checks that reviews include `web_evidence`.
+
 ---
 
 ## Deployment
@@ -298,6 +340,16 @@ Use MetaMask, Rabby, or another injected EIP-1193 wallet. The app checks for Gen
 ### Contract
 
 Deploy `contracts/BountyLens.py` to GenLayer Studionet and copy the returned contract address into local and Vercel environment variables.
+
+For reviewer submissions, include:
+
+- Live app URL
+- Full source repository URL
+- Deployed GenLayer contract address
+- Contract deployment transaction
+- A sample bounty ID with locked criteria and evidence schema
+- A sample submission ID whose review panel shows validator web checks
+- Output from `npm run lint`, `npm run build`, and the relevant `scripts/test-all.mjs` suites
 
 ### Supabase cache
 
@@ -319,7 +371,8 @@ The GenLayer contract remains the canonical state even when Supabase is used for
 | Token support | Native GEN escrow only |
 | Wallet support | Injected EIP-1193 wallets only |
 | Realtime updates | Manual refresh/polling flows, no websocket feed yet |
-| Evidence uploads | Evidence is linked by URL, not uploaded directly |
+| Evidence uploads | Evidence is verified by URL; files are not uploaded directly |
+| Web evidence scope | Repo, commit, PR, docs, and demo reachability are checked; deep semantic code execution is still future work |
 | Cache syncing | Supabase cache is optional and not a replacement for contract state |
 
 ---

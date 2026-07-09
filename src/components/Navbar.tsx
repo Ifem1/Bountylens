@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { WalletButton } from "./WalletButton";
 
@@ -18,7 +19,7 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
         <div className="flex items-center gap-6">
           <Link href="/" className="flex items-center gap-2.5 font-bold text-[#F8FAFC] text-lg tracking-tight">
-            <img src="/logo.svg" alt="" width={24} height={24} className="rounded-full" />
+            <Image src="/logo.svg" alt="" width={24} height={24} className="rounded-full" />
             Bounty<span className="text-[#38BDF8]">Lens</span>
           </Link>
           <nav className="hidden md:flex items-center gap-1">

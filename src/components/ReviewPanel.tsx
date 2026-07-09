@@ -1,6 +1,6 @@
-import type { Submission } from "@/lib/types";
+import type { EvidenceProof, Submission } from "@/lib/types";
 import { formatWeiToGen, safeJsonParse } from "@/lib/format";
-import { CheckCircle, XCircle, AlertCircle, Copy } from "lucide-react";
+import { CheckCircle, XCircle, AlertCircle, Copy, ShieldCheck, ShieldAlert } from "lucide-react";
 
 const VERDICT_STYLES = {
   PASS: { bg: "bg-[#22C55E]/10 border-[#22C55E]/30", text: "text-[#22C55E]" },
@@ -12,6 +12,13 @@ const RISK_STYLES = {
   LOW: "text-[#22C55E]",
   MEDIUM: "text-[#F59E0B]",
   HIGH: "text-[#EF4444]",
+};
+
+const EVIDENCE_STYLES = {
+  verified: "text-[#22C55E] border-[#22C55E]/30 bg-[#22C55E]/10",
+  weak: "text-[#F59E0B] border-[#F59E0B]/30 bg-[#F59E0B]/10",
+  unverified: "text-[#EF4444] border-[#EF4444]/30 bg-[#EF4444]/10",
+  pending: "text-[#94A3B8] border-[#94A3B8]/30 bg-[#94A3B8]/10",
 };
 
 function formatConfidence(value: number): string {
@@ -39,6 +46,9 @@ export function ReviewPanel({ submission }: { submission: Submission }) {
   const passedItems = safeJsonParse<string[]>(submission.passed_items, []);
   const missingItems = safeJsonParse<string[]>(submission.missing_items, []);
   const improvementNotes = safeJsonParse<string[]>(submission.improvement_notes, []);
+  const evidenceProof = safeJsonParse<EvidenceProof | null>(submission.evidence_proof, null);
+  const evidenceStatus = submission.evidence_status || "pending";
+  const evidenceStyle = EVIDENCE_STYLES[evidenceStatus] || EVIDENCE_STYLES.pending;
 
   return (
     <div className={`rounded-xl border ${style.bg} p-5 space-y-4`}>
@@ -69,11 +79,60 @@ export function ReviewPanel({ submission }: { submission: Submission }) {
 
       {/* Duplicate risk */}
       {submission.duplicate_risk && (
-        <div className="text-xs">
-          Duplicate Risk:{" "}
-          <span className={`font-semibold ${RISK_STYLES[submission.duplicate_risk]}`}>
-            {submission.duplicate_risk}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span>
+            Duplicate Risk:{" "}
+            <span className={`font-semibold ${RISK_STYLES[submission.duplicate_risk]}`}>
+              {submission.duplicate_risk}
+            </span>
           </span>
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold ${evidenceStyle}`}>
+            {evidenceStatus === "verified" ? <ShieldCheck size={11} /> : <ShieldAlert size={11} />}
+            Evidence {evidenceStatus}
+          </span>
+        </div>
+      )}
+
+      {evidenceProof && (
+        <div className="rounded-lg bg-[#111827] border border-[#1E293B] p-3 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold text-[#F8FAFC]">Validator Web Evidence</p>
+            {submission.evidence_hash && (
+              <button
+                onClick={() => navigator.clipboard.writeText(submission.evidence_hash || "")}
+                className="text-[11px] text-[#94A3B8] hover:text-[#F8FAFC] font-mono flex items-center gap-1"
+              >
+                <Copy size={10} /> {submission.evidence_hash.slice(0, 10)}
+              </button>
+            )}
+          </div>
+          {evidenceProof.checks?.length ? (
+            <div className="space-y-2">
+              {evidenceProof.checks.map((check, i) => (
+                <div key={`${check.label}-${i}`} className="flex items-start justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <p className="text-[#F8FAFC]">{check.label}</p>
+                    {check.url && (
+                      <a
+                        href={check.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#38BDF8] hover:underline break-all"
+                      >
+                        {check.url}
+                      </a>
+                    )}
+                    {check.error && <p className="text-[#EF4444]">{check.error}</p>}
+                  </div>
+                  <span className={check.reachable ? "text-[#22C55E]" : "text-[#EF4444]"}>
+                    {check.status_code || "n/a"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-[#94A3B8]">No web checks were recorded.</p>
+          )}
         </div>
       )}
 

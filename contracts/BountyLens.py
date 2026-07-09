@@ -72,6 +72,7 @@ class BountyLens(gl.Contract):
         acceptance_criteria: str,
         rejection_criteria: str,
         required_evidence: str,
+        evidence_schema: str,
         pass_threshold: u256,
     ) -> str:
         payload = json.dumps(
@@ -79,6 +80,7 @@ class BountyLens(gl.Contract):
                 "acceptance_criteria": acceptance_criteria,
                 "rejection_criteria": rejection_criteria,
                 "required_evidence": required_evidence,
+                "evidence_schema": evidence_schema,
                 "pass_threshold": int(pass_threshold),
             },
             sort_keys=True,
@@ -91,6 +93,238 @@ class BountyLens(gl.Contract):
         if value == "REVISION":
             return "REVISION"
         return "REJECT"
+
+    def _safe_json_object(self, raw: str) -> dict:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def _safe_json_array(self, raw: str) -> list:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+        return []
+
+    def _normalise_url(self, value: str) -> str:
+        url = str(value).strip()
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        return ""
+
+    def _extract_github_repo(self, url: str) -> dict:
+        clean = self._normalise_url(url)
+        marker = "github.com/"
+        if marker not in clean:
+            return {"owner": "", "repo": "", "api": ""}
+
+        after = clean.split(marker, 1)[1]
+        parts = after.split("/")
+        if len(parts) < 2:
+            return {"owner": "", "repo": "", "api": ""}
+
+        owner = parts[0].strip()
+        repo = parts[1].split("#")[0].split("?")[0].strip()
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+
+        if owner == "" or repo == "":
+            return {"owner": "", "repo": "", "api": ""}
+
+        return {
+            "owner": owner,
+            "repo": repo,
+            "api": "https://api.github.com/repos/" + owner + "/" + repo,
+        }
+
+    def _parse_evidence_payload(self, submission_url: str, raw: str) -> dict:
+        data = self._safe_json_object(raw)
+        if data == {}:
+            data = {
+                "repo_url": submission_url if "github.com/" in submission_url else "",
+                "demo_url": submission_url if "github.com/" not in submission_url else "",
+                "notes": raw,
+            }
+
+        repo_url = self._normalise_url(str(data.get("repo_url", "")))
+        if repo_url == "" and "github.com/" in submission_url:
+            repo_url = self._normalise_url(submission_url)
+
+        demo_url = self._normalise_url(str(data.get("demo_url", "")))
+        if demo_url == "" and "github.com/" not in submission_url:
+            demo_url = self._normalise_url(submission_url)
+
+        pr_url = self._normalise_url(str(data.get("pr_url", "")))
+        docs_url = self._normalise_url(str(data.get("docs_url", "")))
+
+        links = data.get("additional_links", [])
+        if not isinstance(links, list):
+            links = []
+
+        return {
+            "repo_url": repo_url,
+            "commit_sha": str(data.get("commit_sha", "")).strip(),
+            "demo_url": demo_url,
+            "pr_url": pr_url,
+            "docs_url": docs_url,
+            "test_command": str(data.get("test_command", "")).strip(),
+            "notes": str(data.get("notes", "")).strip(),
+            "additional_links": links,
+        }
+
+    def _web_status_summary(self, url: str, label: str) -> dict:
+        if url == "":
+            return {
+                "label": label,
+                "url": "",
+                "status_code": 0,
+                "reachable": False,
+            }
+
+        response = gl.nondet.web.get(url)
+        status_code = int(response.status_code)
+        return {
+            "label": label,
+            "url": url,
+            "status_code": status_code,
+            "reachable": status_code >= 200 and status_code < 400,
+        }
+
+    def _web_json_summary(self, url: str, label: str) -> dict:
+        if url == "":
+            return {
+                "label": label,
+                "url": "",
+                "status_code": 0,
+                "reachable": False,
+                "stable_fields": {},
+            }
+
+        response = gl.nondet.web.get(url)
+        status_code = int(response.status_code)
+        raw_body = response.body
+        if hasattr(raw_body, "decode"):
+            body = raw_body.decode("utf-8")
+        else:
+            body = str(raw_body)
+        fields = {}
+        try:
+            data = json.loads(body)
+            if isinstance(data, dict):
+                for key in [
+                    "id",
+                    "name",
+                    "full_name",
+                    "html_url",
+                    "default_branch",
+                    "sha",
+                    "state",
+                    "merged",
+                    "message",
+                ]:
+                    if key in data:
+                        fields[key] = data[key]
+                if "owner" in data and isinstance(data["owner"], dict):
+                    fields["owner_login"] = data["owner"].get("login", "")
+                if "commit" in data and isinstance(data["commit"], dict):
+                    commit = data["commit"]
+                    fields["commit_message"] = str(commit.get("message", ""))[:160]
+        except Exception:
+            fields["body_hash"] = hashlib.sha256(body.encode()).hexdigest()
+
+        return {
+            "label": label,
+            "url": url,
+            "status_code": status_code,
+            "reachable": status_code >= 200 and status_code < 400,
+            "stable_fields": fields,
+        }
+
+    def _collect_web_evidence(self, evidence: dict) -> dict:
+        checks = []
+        repo = self._extract_github_repo(evidence.get("repo_url", ""))
+        repo_verified = False
+        commit_verified = False
+        demo_verified = False
+        pr_verified = False
+
+        if repo.get("api", "") != "":
+            repo_check = self._web_json_summary(repo["api"], "github_repo")
+            checks.append(repo_check)
+            repo_verified = bool(repo_check.get("reachable", False))
+
+            commit_sha = evidence.get("commit_sha", "")
+            if commit_sha != "":
+                commit_url = repo["api"] + "/commits/" + commit_sha
+                commit_check = self._web_json_summary(commit_url, "github_commit")
+                checks.append(commit_check)
+                commit_verified = bool(commit_check.get("reachable", False))
+
+            readme_url = repo["api"] + "/readme"
+            readme_check = self._web_json_summary(readme_url, "github_readme")
+            checks.append(readme_check)
+
+        if evidence.get("demo_url", "") != "":
+            demo_check = self._web_status_summary(evidence.get("demo_url", ""), "live_demo")
+            checks.append(demo_check)
+            demo_verified = bool(demo_check.get("reachable", False))
+
+        if evidence.get("pr_url", "") != "":
+            pr_repo = self._extract_github_repo(evidence.get("pr_url", ""))
+            pr_parts = evidence.get("pr_url", "").split("/pull/")
+            if pr_repo.get("api", "") != "" and len(pr_parts) == 2:
+                pr_number = pr_parts[1].split("/")[0].split("?")[0].split("#")[0]
+                pr_check = self._web_json_summary(pr_repo["api"] + "/pulls/" + pr_number, "github_pull_request")
+                checks.append(pr_check)
+                pr_verified = bool(pr_check.get("reachable", False))
+            else:
+                checks.append(self._web_status_summary(evidence.get("pr_url", ""), "pull_request"))
+
+        if evidence.get("docs_url", "") != "":
+            checks.append(self._web_status_summary(evidence.get("docs_url", ""), "docs"))
+
+        return {
+            "web_checked": len(checks) > 0,
+            "repo": repo,
+            "repo_verified": repo_verified,
+            "commit_verified": commit_verified,
+            "demo_verified": demo_verified,
+            "pr_verified": pr_verified,
+            "checks": checks,
+            "evidence_hash": hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest(),
+        }
+
+    def _verify_evidence(self, evidence: dict) -> dict:
+        def fetch_evidence() -> dict:
+            return self._collect_web_evidence(evidence)
+
+        try:
+            return gl.eq_principle.strict_eq(fetch_evidence)
+        except Exception as error:
+            return {
+                "web_checked": False,
+                "repo": self._extract_github_repo(evidence.get("repo_url", "")),
+                "repo_verified": False,
+                "commit_verified": False,
+                "demo_verified": False,
+                "pr_verified": False,
+                "checks": [
+                    {
+                        "label": "web_access",
+                        "url": "",
+                        "status_code": 0,
+                        "reachable": False,
+                        "error": str(error)[:180],
+                    }
+                ],
+                "evidence_hash": hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest(),
+            }
 
     # ─────────────────────────────────────────────
     # BOUNTY CREATION
@@ -108,6 +342,7 @@ class BountyLens(gl.Contract):
         acceptance_criteria: str,
         rejection_criteria: str,
         required_evidence: str,
+        evidence_schema: str,
         pass_threshold: u256,
         revision_allowed: bool,
         revision_notes: str,
@@ -138,6 +373,7 @@ class BountyLens(gl.Contract):
             "acceptance_criteria": acceptance_criteria,
             "rejection_criteria": rejection_criteria,
             "required_evidence": required_evidence,
+            "evidence_schema": evidence_schema,
             "pass_threshold": int(pass_threshold),
             "revision_allowed": revision_allowed,
             "revision_notes": revision_notes,
@@ -283,6 +519,7 @@ class BountyLens(gl.Contract):
         acceptance_criteria: str,
         rejection_criteria: str,
         required_evidence: str,
+        evidence_schema: str,
         pass_threshold: u256,
         revision_allowed: bool,
         revision_notes: str,
@@ -303,6 +540,7 @@ class BountyLens(gl.Contract):
         bounty["acceptance_criteria"] = acceptance_criteria
         bounty["rejection_criteria"] = rejection_criteria
         bounty["required_evidence"] = required_evidence
+        bounty["evidence_schema"] = evidence_schema
         bounty["pass_threshold"] = int(pass_threshold)
         bounty["revision_allowed"] = revision_allowed
         bounty["revision_notes"] = revision_notes
@@ -321,7 +559,7 @@ class BountyLens(gl.Contract):
         bounty_id: str,
         submission_url: str,
         description: str,
-        evidence_links: str,
+        evidence_payload: str,
         is_revision: bool,
         original_submission_id: str,
     ) -> str:
@@ -333,7 +571,7 @@ class BountyLens(gl.Contract):
         assert bounty["status"] == "open", "Bounty not open"
         assert bounty.get("funded", False), "Bounty not funded"
         assert contributor != bounty["poster"], "Poster cannot submit to own bounty"
-        assert submission_url != "" or evidence_links != "", "Submission URL or evidence required"
+        assert submission_url != "" or evidence_payload != "", "Submission URL or evidence required"
 
         if is_revision:
             assert original_submission_id != "", "Original submission required"
@@ -347,6 +585,7 @@ class BountyLens(gl.Contract):
 
         self.submission_counter += u256(1)
         submission_id = "sub_" + str(self.submission_counter)
+        evidence = self._parse_evidence_payload(submission_url, evidence_payload)
 
         if not bounty.get("criteria_locked", False):
             bounty["criteria_locked"] = True
@@ -355,6 +594,7 @@ class BountyLens(gl.Contract):
                 bounty["acceptance_criteria"],
                 bounty["rejection_criteria"],
                 bounty["required_evidence"],
+                bounty.get("evidence_schema", ""),
                 u256(bounty["pass_threshold"]),
             )
             bounty["first_submission_id"] = submission_id
@@ -367,11 +607,21 @@ class BountyLens(gl.Contract):
             "contributor": contributor,
             "submission_url": submission_url,
             "description": description,
-            "evidence_links": evidence_links,
+            "evidence_links": evidence_payload,
+            "evidence_payload": evidence_payload,
+            "repo_url": evidence.get("repo_url", ""),
+            "commit_sha": evidence.get("commit_sha", ""),
+            "demo_url": evidence.get("demo_url", ""),
+            "pr_url": evidence.get("pr_url", ""),
+            "docs_url": evidence.get("docs_url", ""),
+            "test_command": evidence.get("test_command", ""),
             "is_revision": is_revision,
             "original_submission_id": original_submission_id if is_revision else "",
 
             "status": "pending",
+            "evidence_status": "pending",
+            "evidence_hash": "",
+            "evidence_proof": "{}",
             "verdict": "",
             "score": 0,
             "confidence": 0,
@@ -435,6 +685,9 @@ class BountyLens(gl.Contract):
                     {
                         "submission_id": sid,
                         "submission_url": previous.get("submission_url", ""),
+                        "repo_url": previous.get("repo_url", ""),
+                        "commit_sha": previous.get("commit_sha", ""),
+                        "demo_url": previous.get("demo_url", ""),
                         "description": previous.get("description", ""),
                         "evidence_links": previous.get("evidence_links", ""),
                         "contributor": previous.get("contributor", ""),
@@ -442,10 +695,26 @@ class BountyLens(gl.Contract):
                     }
                 )
 
+        evidence = self._parse_evidence_payload(
+            submission.get("submission_url", ""),
+            submission.get("evidence_payload", submission.get("evidence_links", "")),
+        )
+        web_evidence = self._verify_evidence(evidence)
+        evidence_status = "verified" if bool(web_evidence.get("web_checked", False)) else "unverified"
+        if bool(web_evidence.get("repo_verified", False)) or bool(web_evidence.get("demo_verified", False)):
+            evidence_status = "verified"
+        if bool(web_evidence.get("web_checked", False)) and not (
+            bool(web_evidence.get("repo_verified", False))
+            or bool(web_evidence.get("demo_verified", False))
+            or bool(web_evidence.get("pr_verified", False))
+        ):
+            evidence_status = "weak"
+
         evaluation_prompt = f"""
 You are an impartial AI judge for a real DAO bounty board.
 
-Evaluate the contributor's submission ONLY against the locked bounty criteria.
+Evaluate the contributor's submission against the locked bounty criteria AND the validator-fetched evidence proof.
+Do not accept claims from the contributor's description unless the proof or submitted links support them.
 
 BOUNTY:
 Title: {bounty["title"]}
@@ -461,15 +730,21 @@ REJECTION CRITERIA:
 REQUIRED EVIDENCE:
 {bounty["required_evidence"]}
 
+LOCKED EVIDENCE SCHEMA:
+{bounty.get("evidence_schema", "")}
+
 PASS THRESHOLD:
 {bounty["pass_threshold"]}
 
 CURRENT SUBMISSION:
 Submission URL: {submission["submission_url"]}
 Description: {submission["description"]}
-Evidence Links: {submission["evidence_links"]}
+Structured Evidence: {json.dumps(evidence)}
 Is Revision: {submission["is_revision"]}
 Original Submission ID: {submission["original_submission_id"]}
+
+VALIDATOR-FETCHED WEB EVIDENCE:
+{json.dumps(web_evidence, sort_keys=True)}
 
 PREVIOUS SUBMISSIONS FOR DUPLICATE DETECTION:
 {json.dumps(previous_submissions)}
@@ -478,12 +753,14 @@ RULES:
 1. Judge only against the locked criteria.
 2. Do not invent extra requirements.
 3. Do not reward popularity, branding, wallet reputation, or social proof unless explicitly required.
-4. Check if the submission is duplicated, copied, or minimally altered from previous submissions.
+4. Use the validator-fetched evidence as the source of truth for repo/demo/PR existence.
 5. Score from 0 to 100.
 6. PASS requires score >= pass threshold and duplicate_risk is not HIGH.
 7. REVISION is allowed only if the score is within 15 points below pass threshold and the bounty allows revision.
 8. REJECT if the work clearly fails the criteria.
 9. REJECT if duplicate_risk is HIGH.
+10. REJECT if required web evidence cannot be verified.
+11. Check if the submission is duplicated, copied, or minimally altered from previous submissions.
 
 Return only valid JSON in this exact shape:
 {{
@@ -492,6 +769,8 @@ Return only valid JSON in this exact shape:
   "confidence": 80,
   "duplicate_risk": "LOW",
   "summary": "One sentence summary.",
+  "evidence_status": "verified",
+  "evidence_checks": ["github_repo reachable", "commit exists"],
   "passed_items": ["criterion met"],
   "missing_items": ["criterion not met"],
   "improvement_notes": ["specific improvement"],
@@ -507,6 +786,9 @@ LOW, MEDIUM, HIGH
 
 Allowed payout_decision values:
 release_payment, request_revision, reject_submission
+
+Allowed evidence_status values:
+verified, weak, unverified
 """
 
         def run_evaluation() -> str:
@@ -516,8 +798,10 @@ release_payment, request_revision, reject_submission
             run_evaluation,
             task=evaluation_prompt,
             criteria=(
-                "The JSON must be internally consistent. "
+                "The JSON must be internally consistent with the validator-fetched web evidence. "
+                "Evidence status must reflect the reachable repo/demo/PR checks. "
                 "PASS requires score >= pass_threshold and duplicate_risk not HIGH. "
+                "PASS requires verified evidence when the bounty requests web evidence. "
                 "REVISION requires revision_allowed true and score within 15 points below threshold. "
                 "REJECT applies when criteria are unmet, score is too low, or duplicate_risk is HIGH."
             ),
@@ -532,6 +816,8 @@ release_payment, request_revision, reject_submission
                 "confidence": 50,
                 "duplicate_risk": "LOW",
                 "summary": "Evaluation could not be parsed.",
+                "evidence_status": evidence_status,
+                "evidence_checks": [],
                 "passed_items": [],
                 "missing_items": ["The AI evaluation returned invalid JSON."],
                 "improvement_notes": [],
@@ -549,13 +835,22 @@ release_payment, request_revision, reject_submission
         if duplicate_risk not in ["LOW", "MEDIUM", "HIGH"]:
             duplicate_risk = "LOW"
 
+        for previous in previous_submissions:
+            if evidence.get("repo_url", "") != "" and evidence.get("repo_url", "") == previous.get("repo_url", ""):
+                duplicate_risk = "HIGH"
+            if evidence.get("commit_sha", "") != "" and evidence.get("commit_sha", "") == previous.get("commit_sha", ""):
+                duplicate_risk = "HIGH"
+            if evidence.get("demo_url", "") != "" and evidence.get("demo_url", "") == previous.get("demo_url", ""):
+                duplicate_risk = "HIGH"
+
         threshold = int(bounty.get("pass_threshold", 80))
         revision_allowed = bool(bounty.get("revision_allowed", False))
 
         verdict = self._normalise_verdict(verdict_data.get("verdict", "REJECT"))
-
         # Deterministic guardrails after AI output
-        if duplicate_risk == "HIGH":
+        if evidence_status != "verified":
+            verdict = "REJECT"
+        elif duplicate_risk == "HIGH":
             verdict = "REJECT"
         elif score >= threshold:
             verdict = "PASS"
@@ -574,7 +869,16 @@ release_payment, request_revision, reject_submission
         verdict_data["verdict"] = verdict
         verdict_data["score"] = score
         verdict_data["duplicate_risk"] = duplicate_risk
+        verdict_data["evidence_status"] = evidence_status
+        verdict_data["evidence_checks"] = verdict_data.get("evidence_checks", [])
+        verdict_data["web_evidence"] = web_evidence
         verdict_data["payout_decision"] = payout_decision
+
+        if evidence_status != "verified":
+            verdict_data["reasoning"] = (
+                "REJECTED: Required web evidence was not verified by validator-side fetching. "
+                + str(verdict_data.get("reasoning", ""))
+            )
 
         if duplicate_risk == "HIGH":
             verdict_data["reasoning"] = (
@@ -583,6 +887,9 @@ release_payment, request_revision, reject_submission
             )
 
         submission["status"] = "reviewed"
+        submission["evidence_status"] = evidence_status
+        submission["evidence_hash"] = str(web_evidence.get("evidence_hash", ""))
+        submission["evidence_proof"] = json.dumps(web_evidence)
         submission["verdict"] = verdict
         submission["score"] = score
         raw_conf = verdict_data.get("confidence", 50)
@@ -633,7 +940,7 @@ release_payment, request_revision, reject_submission
             submission["payout_approved"] = False
             submission["reasoning"] = "Max winners already reached for this bounty."
             self.submissions[submission_id] = json.dumps(submission)
-            self._update_contributor_reputation(contributor, "reject", int(verdict_data.get("score", 0)))
+            self._update_contributor_reputation(contributor, "reject", int(verdict_data.get("score", 0)), u256(0))
             return
 
         payout_amount = self._as_u256_from_string(bounty.get("payout_per_winner", "0"))
@@ -670,8 +977,8 @@ release_payment, request_revision, reject_submission
 
         gl.get_contract_at(Address(contributor)).emit_transfer(value=net_payout, on="finalized")
 
-        self._update_contributor_reputation(contributor, "pass", int(verdict_data.get("score", 80)))
-        self._update_poster_reputation(bounty["poster"], "completed")
+        self._update_contributor_reputation(contributor, "pass", int(verdict_data.get("score", 80)), net_payout)
+        self._update_poster_reputation(bounty["poster"], "completed", net_payout)
 
     def _handle_revision(self, submission_id: str, bounty_id: str, contributor: str) -> None:
         bounty = json.loads(self.bounties.get(bounty_id, "{}"))
@@ -681,17 +988,17 @@ release_payment, request_revision, reject_submission
             submission["status"] = "revision_requested"
             submission["payout_decision"] = "request_revision"
             self.submissions[submission_id] = json.dumps(submission)
-            self._update_contributor_reputation(contributor, "revision", int(submission.get("score", 50)))
+            self._update_contributor_reputation(contributor, "revision", int(submission.get("score", 50)), u256(0))
         else:
             submission["verdict"] = "REJECT"
             submission["status"] = "reviewed"
             submission["payout_decision"] = "reject_submission"
             self.submissions[submission_id] = json.dumps(submission)
-            self._update_contributor_reputation(contributor, "reject", int(submission.get("score", 0)))
+            self._update_contributor_reputation(contributor, "reject", int(submission.get("score", 0)), u256(0))
 
     def _handle_reject(self, submission_id: str, bounty_id: str, contributor: str) -> None:
         submission = json.loads(self.submissions.get(submission_id, "{}"))
-        self._update_contributor_reputation(contributor, "reject", int(submission.get("score", 0)))
+        self._update_contributor_reputation(contributor, "reject", int(submission.get("score", 0)), u256(0))
 
     # ─────────────────────────────────────────────
     # REPUTATION
@@ -732,13 +1039,15 @@ release_payment, request_revision, reject_submission
             }
             self.poster_profiles[wallet] = json.dumps(profile)
 
-    def _update_contributor_reputation(self, wallet: str, outcome: str, score: int) -> None:
+    def _update_contributor_reputation(self, wallet: str, outcome: str, score: int, payout: u256) -> None:
         self._init_contributor_profile(wallet)
 
         data = json.loads(self.contributor_profiles.get(wallet, "{}"))
 
         if outcome == "pass":
             data["total_passed"] = int(data.get("total_passed", 0)) + 1
+            current_earned = self._as_u256_from_string(str(data.get("total_earned", "0")))
+            data["total_earned"] = str(current_earned + payout)
         elif outcome == "reject":
             data["total_rejected"] = int(data.get("total_rejected", 0)) + 1
         elif outcome == "revision":
@@ -751,8 +1060,11 @@ release_payment, request_revision, reject_submission
 
         if total_attempted > 0:
             data["pass_rate"] = (total_passed * 10000) // total_attempted
+            previous_average = int(data.get("average_score", 0))
+            data["average_score"] = ((previous_average * (total_attempted - 1)) + score) // total_attempted
         else:
             data["pass_rate"] = 0
+            data["average_score"] = score
 
         rep = (total_passed * 100) - (total_rejected * 30) + (total_revisions * 20) + score
         data["reputation_score"] = max(0, rep)
@@ -773,7 +1085,7 @@ release_payment, request_revision, reject_submission
         data["updated_at"] = self._now()
         self.contributor_profiles[wallet] = json.dumps(data)
 
-    def _update_poster_reputation(self, wallet: str, event: str) -> None:
+    def _update_poster_reputation(self, wallet: str, event: str, paid_amount: u256) -> None:
         self._init_poster_profile(wallet)
 
         data = json.loads(self.poster_profiles.get(wallet, "{}"))
@@ -781,6 +1093,8 @@ release_payment, request_revision, reject_submission
         if event == "completed":
             data["bounties_completed"] = int(data.get("bounties_completed", 0)) + 1
             data["poster_trust_score"] = min(100, int(data.get("poster_trust_score", 100)) + 1)
+            current_paid = self._as_u256_from_string(str(data.get("total_rewards_paid", "0")))
+            data["total_rewards_paid"] = str(current_paid + paid_amount)
 
         data["updated_at"] = self._now()
         self.poster_profiles[wallet] = json.dumps(data)

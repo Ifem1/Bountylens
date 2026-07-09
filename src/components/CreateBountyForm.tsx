@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBounty, getBountyCount } from "@/lib/genlayer";
 import { useWallet } from "./WalletProvider";
-import { BOUNTY_CATEGORIES } from "@/lib/types";
+import { BOUNTY_CATEGORIES, type EvidenceMode } from "@/lib/types";
 import { Loader2, Info } from "lucide-react";
 
 type FormData = {
@@ -16,10 +16,23 @@ type FormData = {
   acceptanceCriteria: string;
   rejectionCriteria: string;
   requiredEvidence: string;
+  evidenceMode: EvidenceMode;
+  evidenceSchema: string;
   passThreshold: number;
   revisionAllowed: boolean;
   revisionNotes: string;
   isPrivate: boolean;
+};
+
+const EVIDENCE_SCHEMAS: Record<EvidenceMode, string> = {
+  repo_demo:
+    "Required structured fields: repo_url, commit_sha, demo_url, test_command, notes. Validators fetch the GitHub repo, commit, README, and demo URL before judging.",
+  pull_request:
+    "Required structured fields: repo_url, pr_url, commit_sha, test_command, notes. Validators fetch the GitHub repo, pull request, commit, and README before judging.",
+  research_report:
+    "Required structured fields: repo_url or docs_url, commit_sha when code is included, notes, additional_links. Validators fetch available URLs before judging.",
+  custom:
+    "Required structured fields must be listed by the bounty poster. Validators fetch submitted URLs and reject if required web evidence is not reachable.",
 };
 
 const DEFAULTS: FormData = {
@@ -31,6 +44,8 @@ const DEFAULTS: FormData = {
   acceptanceCriteria: "",
   rejectionCriteria: "",
   requiredEvidence: "",
+  evidenceMode: "repo_demo",
+  evidenceSchema: EVIDENCE_SCHEMAS.repo_demo,
   passThreshold: 70,
   revisionAllowed: true,
   revisionNotes: "",
@@ -48,10 +63,23 @@ export function CreateBountyForm() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function setEvidenceMode(mode: EvidenceMode) {
+    setForm((prev) => ({
+      ...prev,
+      evidenceMode: mode,
+      evidenceSchema: EVIDENCE_SCHEMAS[mode],
+    }));
+  }
+
   async function handleCreate() {
     if (!address) { setError("Connect your wallet first."); return; }
-    if (!form.title.trim() || !form.acceptanceCriteria.trim() || !form.requiredEvidence.trim()) {
-      setError("Title, acceptance criteria, and required evidence are required.");
+    if (
+      !form.title.trim() ||
+      !form.acceptanceCriteria.trim() ||
+      !form.requiredEvidence.trim() ||
+      !form.evidenceSchema.trim()
+    ) {
+      setError("Title, acceptance criteria, required evidence, and evidence schema are required.");
       return;
     }
     setError(null);
@@ -183,6 +211,39 @@ export function CreateBountyForm() {
             onChange={(e) => set("requiredEvidence", e.target.value)}
             rows={3}
             placeholder={`What must contributors provide?\n- Live demo URL\n- Loom walkthrough video\n- GitHub repo link`}
+            className={`${inputCls} resize-none`}
+          />
+        </Field>
+
+        <Field label="Evidence verification mode" required>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              ["repo_demo", "Repo + demo"],
+              ["pull_request", "Pull request"],
+              ["research_report", "Research"],
+              ["custom", "Custom"],
+            ] as Array<[EvidenceMode, string]>).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setEvidenceMode(mode)}
+                className={`rounded-xl border px-3 py-2 text-xs font-medium transition-colors ${
+                  form.evidenceMode === mode
+                    ? "border-[#38BDF8] bg-[#38BDF8]/10 text-[#38BDF8]"
+                    : "border-[#1E293B] bg-[#111827] text-[#94A3B8] hover:text-[#F8FAFC]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Locked evidence schema" required>
+          <textarea
+            value={form.evidenceSchema}
+            onChange={(e) => set("evidenceSchema", e.target.value)}
+            rows={4}
             className={`${inputCls} resize-none`}
           />
         </Field>

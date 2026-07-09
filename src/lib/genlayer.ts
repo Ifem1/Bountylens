@@ -223,6 +223,7 @@ export async function createBounty(args: {
   acceptanceCriteria: string;
   rejectionCriteria: string;
   requiredEvidence: string;
+  evidenceSchema: string;
   passThreshold: number;
   revisionAllowed: boolean;
   revisionNotes: string;
@@ -242,6 +243,7 @@ export async function createBounty(args: {
       args.acceptanceCriteria,
       args.rejectionCriteria,
       args.requiredEvidence,
+      args.evidenceSchema,
       BigInt(args.passThreshold),
       args.revisionAllowed,
       args.revisionNotes,
@@ -267,7 +269,7 @@ export async function submitWork(args: {
   bountyId: string;
   submissionUrl: string;
   description: string;
-  evidenceLinks: string;
+  evidencePayload: string;
   isRevision: boolean;
   originalSubmissionId: string;
 }): Promise<string> {
@@ -279,7 +281,7 @@ export async function submitWork(args: {
       args.bountyId,
       args.submissionUrl,
       args.description,
-      args.evidenceLinks,
+      args.evidencePayload,
       args.isRevision,
       args.originalSubmissionId,
     ],

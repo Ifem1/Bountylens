@@ -325,6 +325,9 @@ export default function BountyDetailPage() {
               <CriteriaSection label="Rejection Criteria" content={bounty.rejection_criteria} color="danger" />
             )}
             <CriteriaSection label="Required Evidence" content={bounty.required_evidence} color="primary" />
+            {bounty.evidence_schema && (
+              <CriteriaSection label="Validator Evidence Schema" content={bounty.evidence_schema} color="primary" />
+            )}
 
             <div className="flex items-center gap-4 text-xs text-[#94A3B8] pt-2 border-t border-[#1E293B]">
               <span>Pass threshold: <strong className="text-[#F8FAFC]">{bounty.pass_threshold}%</strong></span>
@@ -408,15 +411,17 @@ export default function BountyDetailPage() {
                       {s.description && (
                         <p className="text-xs text-[#94A3B8] line-clamp-3 mb-2">{s.description}</p>
                       )}
-                      <a
-                        href={s.submission_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 text-xs text-[#38BDF8] hover:underline"
-                      >
-                        <ExternalLink size={11} />
-                        {s.submission_url}
-                      </a>
+                      {s.submission_url && (
+                        <a
+                          href={s.submission_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-xs text-[#38BDF8] hover:underline"
+                        >
+                          <ExternalLink size={11} />
+                          {s.submission_url}
+                        </a>
+                      )}
                     </div>
                     <ReviewPanel submission={s} />
                   </div>
