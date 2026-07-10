@@ -178,65 +178,34 @@ class BountyLens(gl.Contract):
             "additional_links": links,
         }
 
-    def _response_status(self, response: object) -> int:
-        for attr in ["status_code", "status", "code"]:
-            try:
-                value = getattr(response, attr)
-                if value is not None:
-                    return int(value)
-            except Exception:
-                pass
-        return 0
-
-    def _response_body(self, response: object) -> str:
-        raw_body = ""
-        for attr in ["body", "text", "content"]:
-            try:
-                value = getattr(response, attr)
-                if value is not None:
-                    raw_body = value
-                    break
-            except Exception:
-                pass
-
-        if hasattr(raw_body, "decode"):
-            return raw_body.decode("utf-8")
-        return str(raw_body)
-
-    def _web_status_summary(self, url: str, label: str) -> dict:
+    def _render_url(self, url: str, label: str) -> dict:
+        # Must be called from inside a function invoked via gl.eq_principle.* —
+        # gl.nondet.web.render is a non-deterministic op and errors otherwise.
         if url == "":
+            return {"label": label, "url": "", "reachable": False, "content": ""}
+
+        try:
+            rendered = gl.nondet.web.render(url, mode="text")
+            content = str(rendered)
             return {
                 "label": label,
-                "url": "",
-                "status_code": 0,
-                "reachable": False,
+                "url": url,
+                "reachable": content.strip() != "",
+                "content": content[:2000],
             }
-
-        response = gl.nondet.web.get(url)
-        status_code = self._response_status(response)
-        return {
-            "label": label,
-            "url": url,
-            "status_code": status_code,
-            "reachable": status_code >= 200 and status_code < 400,
-        }
-
-    def _web_json_summary(self, url: str, label: str) -> dict:
-        if url == "":
+        except Exception as error:
             return {
                 "label": label,
-                "url": "",
-                "status_code": 0,
+                "url": url,
                 "reachable": False,
-                "stable_fields": {},
+                "content": "",
+                "error": str(error)[:180],
             }
 
-        response = gl.nondet.web.get(url)
-        status_code = self._response_status(response)
-        body = self._response_body(response)
+    def _stable_fields_from_rendered_json(self, rendered: dict) -> dict:
         fields = {}
         try:
-            data = json.loads(body)
+            data = json.loads(rendered.get("content", ""))
             if isinstance(data, dict):
                 for key in [
                     "id",
@@ -257,17 +226,13 @@ class BountyLens(gl.Contract):
                     commit = data["commit"]
                     fields["commit_message"] = str(commit.get("message", ""))[:160]
         except Exception:
-            fields["body_hash"] = hashlib.sha256(body.encode()).hexdigest()
-
-        return {
-            "label": label,
-            "url": url,
-            "status_code": status_code,
-            "reachable": status_code >= 200 and status_code < 400,
-            "stable_fields": fields,
-        }
+            if rendered.get("content", "") != "":
+                fields["content_hash"] = hashlib.sha256(rendered["content"].encode()).hexdigest()
+        return fields
 
     def _collect_web_evidence(self, evidence: dict) -> dict:
+        # Fetches evidence via gl.nondet.web.render so raw web content can be
+        # handed to the LLM as grounded text, per the GenLayer web.render pattern.
         checks = []
         repo = self._extract_github_repo(evidence.get("repo_url", ""))
         repo_verified = False
@@ -276,39 +241,47 @@ class BountyLens(gl.Contract):
         pr_verified = False
 
         if repo.get("api", "") != "":
-            repo_check = self._web_json_summary(repo["api"], "github_repo")
+            repo_rendered = self._render_url(repo["api"], "github_repo")
+            repo_check = dict(repo_rendered)
+            repo_check["stable_fields"] = self._stable_fields_from_rendered_json(repo_rendered)
             checks.append(repo_check)
-            repo_verified = bool(repo_check.get("reachable", False))
+            repo_verified = bool(repo_rendered.get("reachable", False))
 
             commit_sha = evidence.get("commit_sha", "")
             if commit_sha != "":
                 commit_url = repo["api"] + "/commits/" + commit_sha
-                commit_check = self._web_json_summary(commit_url, "github_commit")
+                commit_rendered = self._render_url(commit_url, "github_commit")
+                commit_check = dict(commit_rendered)
+                commit_check["stable_fields"] = self._stable_fields_from_rendered_json(commit_rendered)
                 checks.append(commit_check)
-                commit_verified = bool(commit_check.get("reachable", False))
+                commit_verified = bool(commit_rendered.get("reachable", False))
 
             readme_url = repo["api"] + "/readme"
-            readme_check = self._web_json_summary(readme_url, "github_readme")
+            readme_rendered = self._render_url(readme_url, "github_readme")
+            readme_check = dict(readme_rendered)
+            readme_check["stable_fields"] = self._stable_fields_from_rendered_json(readme_rendered)
             checks.append(readme_check)
 
         if evidence.get("demo_url", "") != "":
-            demo_check = self._web_status_summary(evidence.get("demo_url", ""), "live_demo")
-            checks.append(demo_check)
-            demo_verified = bool(demo_check.get("reachable", False))
+            demo_rendered = self._render_url(evidence.get("demo_url", ""), "live_demo")
+            checks.append(demo_rendered)
+            demo_verified = bool(demo_rendered.get("reachable", False))
 
         if evidence.get("pr_url", "") != "":
             pr_repo = self._extract_github_repo(evidence.get("pr_url", ""))
             pr_parts = evidence.get("pr_url", "").split("/pull/")
             if pr_repo.get("api", "") != "" and len(pr_parts) == 2:
                 pr_number = pr_parts[1].split("/")[0].split("?")[0].split("#")[0]
-                pr_check = self._web_json_summary(pr_repo["api"] + "/pulls/" + pr_number, "github_pull_request")
+                pr_rendered = self._render_url(pr_repo["api"] + "/pulls/" + pr_number, "github_pull_request")
+                pr_check = dict(pr_rendered)
+                pr_check["stable_fields"] = self._stable_fields_from_rendered_json(pr_rendered)
                 checks.append(pr_check)
-                pr_verified = bool(pr_check.get("reachable", False))
+                pr_verified = bool(pr_rendered.get("reachable", False))
             else:
-                checks.append(self._web_status_summary(evidence.get("pr_url", ""), "pull_request"))
+                checks.append(self._render_url(evidence.get("pr_url", ""), "pull_request"))
 
         if evidence.get("docs_url", "") != "":
-            checks.append(self._web_status_summary(evidence.get("docs_url", ""), "docs"))
+            checks.append(self._render_url(evidence.get("docs_url", ""), "docs"))
 
         return {
             "web_checked": len(checks) > 0,
@@ -336,7 +309,6 @@ class BountyLens(gl.Contract):
                     {
                         "label": "web_access",
                         "url": "",
-                        "status_code": 0,
                         "reachable": False,
                         "error": str(error)[:180],
                     }
@@ -717,18 +689,27 @@ class BountyLens(gl.Contract):
             submission.get("submission_url", ""),
             submission.get("evidence_payload", submission.get("evidence_links", "")),
         )
-        web_evidence = self._verify_evidence(evidence)
-        evidence_status = "verified" if bool(web_evidence.get("web_checked", False)) else "unverified"
-        if bool(web_evidence.get("repo_verified", False)) or bool(web_evidence.get("demo_verified", False)):
-            evidence_status = "verified"
-        if bool(web_evidence.get("web_checked", False)) and not (
-            bool(web_evidence.get("repo_verified", False))
-            or bool(web_evidence.get("demo_verified", False))
-            or bool(web_evidence.get("pr_verified", False))
-        ):
-            evidence_status = "weak"
 
-        evaluation_prompt = f"""
+        def _evidence_status_from(web_evidence: dict) -> str:
+            status = "verified" if bool(web_evidence.get("web_checked", False)) else "unverified"
+            if bool(web_evidence.get("repo_verified", False)) or bool(web_evidence.get("demo_verified", False)):
+                status = "verified"
+            if bool(web_evidence.get("web_checked", False)) and not (
+                bool(web_evidence.get("repo_verified", False))
+                or bool(web_evidence.get("demo_verified", False))
+                or bool(web_evidence.get("pr_verified", False))
+            ):
+                status = "weak"
+            return status
+
+        def run_evaluation() -> str:
+            # gl.nondet.web.render must be called from inside a function invoked
+            # via gl.eq_principle.* — fetch and render web evidence here, then
+            # hand the rendered content to the LLM as grounded context.
+            web_evidence = self._verify_evidence(evidence)
+            evidence_status = _evidence_status_from(web_evidence)
+
+            evaluation_prompt = f"""
 You are an impartial AI judge for a real DAO bounty board.
 
 Evaluate the contributor's submission against the locked bounty criteria AND the validator-fetched evidence proof.
@@ -761,7 +742,7 @@ Structured Evidence: {json.dumps(evidence)}
 Is Revision: {submission["is_revision"]}
 Original Submission ID: {submission["original_submission_id"]}
 
-VALIDATOR-FETCHED WEB EVIDENCE:
+VALIDATOR-RENDERED WEB EVIDENCE (fetched via gl.nondet.web.render):
 {json.dumps(web_evidence, sort_keys=True)}
 
 PREVIOUS SUBMISSIONS FOR DUPLICATE DETECTION:
@@ -771,7 +752,7 @@ RULES:
 1. Judge only against the locked criteria.
 2. Do not invent extra requirements.
 3. Do not reward popularity, branding, wallet reputation, or social proof unless explicitly required.
-4. Use the validator-fetched evidence as the source of truth for repo/demo/PR existence.
+4. Use the validator-rendered evidence as the source of truth for repo/demo/PR existence.
 5. Score from 0 to 100.
 6. PASS requires score >= pass threshold and duplicate_risk is not HIGH.
 7. REVISION is allowed only if the score is within 15 points below pass threshold and the bounty allows revision.
@@ -809,14 +790,26 @@ Allowed evidence_status values:
 verified, weak, unverified
 """
 
-        def run_evaluation() -> str:
-            return gl.nondet.exec_prompt(evaluation_prompt)
+            llm_result = gl.nondet.exec_prompt(evaluation_prompt)
+            try:
+                parsed = json.loads(llm_result)
+                if not isinstance(parsed, dict):
+                    parsed = {}
+            except Exception:
+                parsed = {}
+
+            parsed["web_evidence"] = web_evidence
+            parsed["evidence_status_computed"] = evidence_status
+            return json.dumps(parsed)
 
         result = gl.eq_principle.prompt_non_comparative(
             run_evaluation,
-            task=evaluation_prompt,
+            task=(
+                "Fetch web evidence for the submitted links via gl.nondet.web.render, "
+                "then judge the submission against the locked bounty criteria using that evidence as ground truth."
+            ),
             criteria=(
-                "The JSON must be internally consistent with the validator-fetched web evidence. "
+                "The JSON must be internally consistent with the validator-rendered web evidence. "
                 "Evidence status must reflect the reachable repo/demo/PR checks. "
                 "PASS requires score >= pass_threshold and duplicate_risk not HIGH. "
                 "PASS requires verified evidence when the bounty requests web evidence. "
@@ -827,7 +820,15 @@ verified, weak, unverified
 
         try:
             verdict_data = json.loads(result)
+            if not isinstance(verdict_data, dict):
+                verdict_data = {}
         except Exception:
+            verdict_data = {}
+
+        web_evidence = verdict_data.get("web_evidence", {})
+        evidence_status = verdict_data.get("evidence_status_computed", "unverified")
+
+        if verdict_data == {}:
             verdict_data = {
                 "verdict": "REJECT",
                 "score": 0,
@@ -890,6 +891,7 @@ verified, weak, unverified
         verdict_data["evidence_status"] = evidence_status
         verdict_data["evidence_checks"] = verdict_data.get("evidence_checks", [])
         verdict_data["web_evidence"] = web_evidence
+        verdict_data.pop("evidence_status_computed", None)
         verdict_data["payout_decision"] = payout_decision
 
         if evidence_status != "verified":
