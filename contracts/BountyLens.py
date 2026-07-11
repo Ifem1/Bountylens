@@ -505,7 +505,8 @@ class BountyLens(gl.Contract):
 
         self.bounties[bounty_id] = json.dumps(bounty)
 
-        _Recipient(Address(gl.message.sender_address)).emit_transfer(value=remaining, on="finalized")
+        # sender_address is already an Address; do not wrap it again.
+        _Recipient(gl.message.sender_address).emit_transfer(value=remaining, on="finalized")
 
     # ─────────────────────────────────────────────
     # UPDATE BEFORE LOCK
