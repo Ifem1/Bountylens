@@ -6,7 +6,7 @@
 
 Live app: https://bountylens-livid.vercel.app  
 Repository: https://github.com/Ifem1/Bountylens
-Current Studionet contract: `0x6419Dc0181237bF61dCcdd91B41bF753A7D8DAE7`
+Current Studionet contract: `0x69661b15014B98587B1318b6D2CEf539aA3Bd7D5`
 
 ---
 
