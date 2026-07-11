@@ -69,7 +69,7 @@ GenLayer evaluates verified evidence
 
 BountyLens is not an advice, recommendation, or summary app with consensus attached. It uses validator consensus because real GEN escrow is released based on externally verifiable bounty outcomes.
 
-The contract performs validator-side web access with `gl.nondet.web.get()` and stores a stable proof trail before payout logic runs. A PASS verdict requires more than valid JSON: required web evidence must be reachable and consistent with the locked evidence schema. If the repo/demo/PR/docs evidence cannot be verified, the deterministic guardrails reject the submission.
+The contract performs validator-side web access with `gl.nondet.web.render()` and stores a stable proof trail before payout logic runs. Leader and validator independently fetch and evaluate the evidence using comparative equivalence because the verdict controls payout. A PASS verdict requires more than valid JSON: required web evidence must be reachable and consistent with the locked evidence schema. If the repo/demo/PR/docs evidence cannot be verified, the deterministic guardrails reject the submission.
 
 ---
 

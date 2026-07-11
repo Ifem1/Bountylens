@@ -815,19 +815,16 @@ verified, weak, unverified
             parsed["evidence_status_computed"] = evidence_status
             return json.dumps(parsed)
 
-        result = gl.eq_principle.prompt_non_comparative(
+        result = gl.eq_principle.prompt_comparative(
             run_evaluation,
-            task=(
-                "Fetch web evidence for the submitted links via gl.nondet.web.render, "
-                "then judge the submission against the locked bounty criteria using that evidence as ground truth."
-            ),
-            criteria=(
-                "The JSON must be internally consistent with the validator-rendered web evidence. "
-                "Evidence status must reflect the reachable repo/demo/PR checks. "
-                "PASS requires score >= pass_threshold and duplicate_risk not HIGH. "
-                "PASS requires verified evidence when the bounty requests web evidence. "
+            principle=(
+                "This is a payout-controlling bounty verdict. Both evaluations must independently "
+                "fetch the submitted links with gl.nondet.web.render and judge the locked criteria. "
+                "The verdict must agree exactly; score may differ by at most 10 points. "
+                "duplicate_risk, evidence_status, and payout_decision must agree exactly. "
+                "PASS requires score >= pass_threshold, verified evidence, and duplicate_risk not HIGH. "
                 "REVISION requires revision_allowed true and score within 15 points below threshold. "
-                "REJECT applies when criteria are unmet, score is too low, or duplicate_risk is HIGH."
+                "If the evidence or criteria assessment conflicts, choose REJECT."
             ),
         )
 
