@@ -6,6 +6,17 @@ import json
 import hashlib
 
 
+@gl.evm.contract_interface
+class _Recipient:
+    """EVM-layer recipient interface for native GEN transfers to EOAs."""
+
+    class View:
+        pass
+
+    class Write:
+        pass
+
+
 class BountyLens(gl.Contract):
     """
     BountyLens
@@ -494,7 +505,7 @@ class BountyLens(gl.Contract):
 
         self.bounties[bounty_id] = json.dumps(bounty)
 
-        gl.get_contract_at(gl.message.sender_address).emit_transfer(value=remaining, on="finalized")
+        _Recipient(Address(gl.message.sender_address)).emit_transfer(value=remaining, on="finalized")
 
     # ─────────────────────────────────────────────
     # UPDATE BEFORE LOCK
@@ -995,7 +1006,10 @@ verified, weak, unverified
         submission["fee_amount"] = str(fee_amount)
         self.submissions[submission_id] = json.dumps(submission)
 
-        gl.get_contract_at(Address(contributor)).emit_transfer(value=net_payout, on="finalized")
+        # EOAs live on the chain/EVM layer. Use the EVM interface so this
+        # native GEN transfer is emitted as an external message rather than
+        # incorrectly treating the recipient as another Intelligent Contract.
+        _Recipient(Address(contributor)).emit_transfer(value=net_payout, on="finalized")
 
         self._update_contributor_reputation(contributor, "pass", int(verdict_data.get("score", 80)), net_payout)
         self._update_poster_reputation(bounty["poster"], "completed", net_payout)

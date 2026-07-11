@@ -398,6 +398,11 @@ async function suite_nondetEvaluation() {
   const rev1 = parseJsonField(await readContract("get_review", [sid1]));
   console.log("  review user1:", JSON.stringify({ verdict: rev1.verdict, score: rev1.score, dup: rev1.duplicate_risk, decision: rev1.payout_decision }));
   assertVerdictPayload(rev1, 70, true);
+  if (rev1.verdict === "PASS") {
+    assert(sub1.payout_approved === true, "PASS => payout approved");
+    assert(BigInt(sub1.payout_amount) > 0n, "PASS => positive payout amount");
+    assert(BigInt(sub1.fee_amount) > 0n, "PASS => positive treasury fee");
+  }
 
   // After the first submission the bounty should be criteria_locked
   const bAfter1 = parseJsonField(await readContract("get_bounty", [bountyId]));
