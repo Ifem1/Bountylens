@@ -311,3 +311,14 @@ export async function refundRemainingEscrow(bountyId: string): Promise<string> {
   });
   return hash as string;
 }
+
+export async function claimPayout(submissionId: string): Promise<string> {
+  const client = await getWriteClient();
+  const hash = await client.writeContract({
+    address: addr(),
+    functionName: CONTRACT_FUNCTIONS.claimPayout,
+    args: [submissionId],
+    value: 0n,
+  });
+  return hash as string;
+}

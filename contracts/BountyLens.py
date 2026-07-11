@@ -638,6 +638,7 @@ class BountyLens(gl.Contract):
             "payout_approved_at": "",
             "payout_amount": "0",
             "fee_amount": "0",
+            "payout_claimed": False,
 
             "created_at": self._now(),
             "reviewed_at": "",
@@ -1010,10 +1011,28 @@ verified, weak, unverified
         # EOAs live on the chain/EVM layer. Use the EVM interface so this
         # native GEN transfer is emitted as an external message rather than
         # incorrectly treating the recipient as another Intelligent Contract.
-        _Recipient(Address(contributor)).emit_transfer(value=net_payout, on="finalized")
+        # PASS approval is recorded first. The contributor claims the payout
+        # separately so a failed child transfer can be retried.
 
-        self._update_contributor_reputation(contributor, "pass", int(verdict_data.get("score", 80)), net_payout)
-        self._update_poster_reputation(bounty["poster"], "completed", net_payout)
+    @gl.public.write
+    def claim_payout(self, submission_id: str) -> None:
+        assert self._exists(self.submissions, submission_id), "Submission not found"
+        submission = json.loads(self.submissions.get(submission_id, "{}"))
+        contributor = submission.get("contributor", "")
+        assert contributor == self._sender(), "Only the contributor can claim"
+        assert submission.get("verdict") == "PASS", "Submission has not passed"
+        assert submission.get("payout_approved", False), "Payout is not approved"
+        assert not submission.get("payout_claimed", False), "Payout already claimed"
+
+        amount = self._as_u256_from_string(submission.get("payout_amount", "0"))
+        assert amount > u256(0), "Invalid payout amount"
+        submission["payout_claimed"] = True
+        self.submissions[submission_id] = json.dumps(submission)
+
+        _Recipient(gl.message.sender_address).emit_transfer(value=amount, on="finalized")
+        self._update_contributor_reputation(contributor, "pass", int(submission.get("score", 80)), amount)
+        bounty = json.loads(self.bounties.get(submission["bounty_id"], "{}"))
+        self._update_poster_reputation(bounty["poster"], "completed", amount)
 
     def _handle_revision(self, submission_id: str, bounty_id: str, contributor: str) -> None:
         bounty = json.loads(self.bounties.get(bounty_id, "{}"))

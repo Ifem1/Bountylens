@@ -1,6 +1,10 @@
+"use client";
+
+import { useState } from "react";
 import type { EvidenceProof, Submission } from "@/lib/types";
+import { claimPayout } from "@/lib/genlayer";
 import { formatWeiToGen, safeJsonParse } from "@/lib/format";
-import { CheckCircle, XCircle, AlertCircle, Copy, ShieldCheck, ShieldAlert } from "lucide-react";
+import { CheckCircle, XCircle, AlertCircle, Copy, ShieldCheck, ShieldAlert, Loader2 } from "lucide-react";
 
 const VERDICT_STYLES = {
   PASS: { bg: "bg-[#22C55E]/10 border-[#22C55E]/30", text: "text-[#22C55E]" },
@@ -31,6 +35,8 @@ function formatPayout(value: string): string {
 }
 
 export function ReviewPanel({ submission }: { submission: Submission }) {
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState("");
   if (!submission.verdict) {
     return (
       <div className="rounded-xl border border-[#1E293B] bg-[#0F172A] p-5">
@@ -202,6 +208,28 @@ export function ReviewPanel({ submission }: { submission: Submission }) {
               ? `Payout approved${submission.payout_amount ? ` - ${formatPayout(submission.payout_amount)}` : ""}`
               : "Payout approval processing…"}
           </p>
+          {submission.payout_approved && !submission.payout_claimed && (
+            <button
+              type="button"
+              disabled={claiming}
+              onClick={async () => {
+                setClaiming(true);
+                setClaimError("");
+                try {
+                  await claimPayout(submission.id);
+                } catch (error) {
+                  setClaimError(error instanceof Error ? error.message : "Payout claim failed");
+                } finally {
+                  setClaiming(false);
+                }
+              }}
+              className="mt-2 inline-flex items-center gap-2 rounded-md bg-[#22C55E] px-3 py-1.5 text-xs font-semibold text-[#052E16] disabled:opacity-60"
+            >
+              {claiming && <Loader2 size={12} className="animate-spin" />}
+              {claiming ? "Claiming..." : "Claim payout"}
+            </button>
+          )}
+          {claimError && <p className="mt-2 text-xs text-[#FCA5A5]">{claimError}</p>}
         </div>
       )}
 

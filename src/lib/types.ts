@@ -68,6 +68,7 @@ export type Submission = {
   payout_approved_at: string | null;
   payout_amount: string;
   fee_amount: string;
+  payout_claimed?: boolean;
   created_at: string;
   reviewed_at: string | null;
 };

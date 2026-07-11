@@ -8,6 +8,7 @@ export const CONTRACT_FUNCTIONS = {
   cancelBounty: "cancel_bounty",
   refundRemainingEscrow: "refund_remaining_escrow",
   submitWork: "submit_work",
+  claimPayout: "claim_payout",
   getBounty: "get_bounty",
   getSubmission: "get_submission",
   getReview: "get_review",
